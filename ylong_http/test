@@ -1,0 +1,59 @@
+#!/bin/bash
+
+cd "$(dirname "$0")"
+
+get_examples() {
+    cargo run --example 2>&1 | grep -E "^    " | sed 's/^    //'
+}
+
+PASSED=()
+FAILED=()
+
+if [ $# -eq 0 ]; then
+    echo "Usage: ./test <example_name|all>"
+    echo "Available examples:"
+    get_examples
+    exit 1
+fi
+
+EXAMPLE="$1"
+
+if [ "$EXAMPLE" = "all" ]; then
+    echo "Running all examples..."
+    echo "===================="
+    for ex in $(get_examples); do
+        echo "Running $ex..."
+        echo "--------------------"
+        cargo run --example "$ex" --features tokio_base
+        if [ $? -eq 0 ]; then
+            echo "✓ $ex PASSED"
+            PASSED+=("$ex")
+        else
+            echo "✗ $ex FAILED"
+            FAILED+=("$ex")
+        fi
+        echo "===================="
+    done
+
+    echo ""
+    echo "========== SUMMARY =========="
+    TOTAL=$((${#PASSED[@]} + ${#FAILED[@]}))
+    echo "Passed: ${#PASSED[@]}/$TOTAL"
+    echo ""
+    echo "Passed tests:"
+    for ex in "${PASSED[@]}"; do
+        echo "  ✓ $ex"
+    done
+    echo ""
+    echo "Failed tests:"
+    if [ ${#FAILED[@]} -eq 0 ]; then
+        echo "  (none)"
+    else
+        for ex in "${FAILED[@]}"; do
+            echo "  ✗ $ex"
+        done
+    fi
+    echo "============================="
+else
+    cargo run --example "$EXAMPLE" --features tokio_base
+fi

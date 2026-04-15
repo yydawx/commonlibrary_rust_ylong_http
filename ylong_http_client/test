@@ -1,0 +1,121 @@
+#!/bin/bash
+
+cd "$(dirname "$0")"
+
+get_examples() {
+    cargo run --example 2>&1 | grep -E "^    " | sed 's/^    //'
+}
+
+run_example() {
+    local ex="$1"
+    local features="$2"
+    local tls_flag="$3"
+
+    if [ "$tls_flag" = "tls" ]; then
+        cargo run --example "$ex" --features "$features,libc" 2>&1
+    else
+        cargo run --example "$ex" --features "$features,libc" 2>&1
+    fi
+}
+
+declare -A FEATURES=(
+    ["async_http"]="async,http1_1,ylong_base"
+    ["async_http_dns"]="async,http1_1,ylong_base"
+    ["async_http_multi"]="async,http1_1,ylong_base"
+    ["async_proxy_http"]="async,http1_1,tokio_base"
+    ["async_redirect_http"]="async,http1_1,tokio_base"
+)
+
+declare -A TLS_FEATURES=(
+    ["async_http_doh"]="async,http1_1,ylong_base,__c_openssl,c_openssl_3_0"
+    ["async_certs_adapter"]="async,http1_1,ylong_base,__c_openssl,c_openssl_3_0"
+    ["async_https_outside"]="async,http1_1,__tls,__c_openssl,c_openssl_3_0,tokio_base"
+)
+
+PASSED=()
+FAILED=()
+
+if [ $# -eq 0 ]; then
+    echo "Usage: ./test <example_name|all>"
+    echo "Available examples:"
+    for ex in "${!FEATURES[@]}"; do
+        echo "  $ex (features: ${FEATURES[$ex]})"
+    done
+    for ex in "${!TLS_FEATURES[@]}"; do
+        echo "  $ex (features: ${TLS_FEATURES[$ex]}) [TLS]"
+    done
+    echo ""
+    echo "Note: TLS examples require setting OPENSSL environment variables:"
+    echo "  export OPENSSL_LIB_DIR=<path to libssl>"
+    echo "  export OPENSSL_INCLUDE_DIR=<path to openssl headers>"
+    echo "  export RUSTFLAGS=\"-l ssl -l crypto\""
+    exit 1
+fi
+
+EXAMPLE="$1"
+
+if [ "$EXAMPLE" = "all" ]; then
+    echo "Running all examples..."
+    echo "===================="
+    for ex in "${!FEATURES[@]}"; do
+        echo "Running $ex (${FEATURES[$ex]})..."
+        echo "--------------------"
+        run_example "$ex" "${FEATURES[$ex]}" "notls"
+        if [ $? -eq 0 ]; then
+            echo "✓ $ex PASSED"
+            PASSED+=("$ex")
+        else
+            echo "✗ $ex FAILED"
+            FAILED+=("$ex")
+        fi
+        echo "===================="
+    done
+    for ex in "${!TLS_FEATURES[@]}"; do
+        echo "Running $ex (${TLS_FEATURES[$ex]}) [TLS]..."
+        echo "--------------------"
+        run_example "$ex" "${TLS_FEATURES[$ex]}" "tls"
+        if [ $? -eq 0 ]; then
+            echo "✓ $ex PASSED"
+            PASSED+=("$ex")
+        else
+            echo "✗ $ex FAILED"
+            FAILED+=("$ex")
+        fi
+        echo "===================="
+    done
+
+    echo ""
+    echo "========== SUMMARY =========="
+    echo "Passed: ${#PASSED[@]}/${#FEATURES[@]}+${#TLS_FEATURES[@]} (Total: $((${#FEATURES[@]} + ${#TLS_FEATURES[@]})))"
+    echo ""
+    echo "Passed tests:"
+    for ex in "${PASSED[@]}"; do
+        echo "  ✓ $ex"
+    done
+    echo ""
+    echo "Failed tests:"
+    if [ ${#FAILED[@]} -eq 0 ]; then
+        echo "  (none)"
+    else
+        for ex in "${FAILED[@]}"; do
+            echo "  ✗ $ex"
+        done
+    fi
+    echo "============================="
+else
+    if [ -n "${FEATURES[$EXAMPLE]}" ]; then
+        run_example "$EXAMPLE" "${FEATURES[$EXAMPLE]}" "notls"
+    elif [ -n "${TLS_FEATURES[$EXAMPLE]}" ]; then
+        run_example "$EXAMPLE" "${TLS_FEATURES[$EXAMPLE]}" "tls"
+    else
+        echo "Error: Unknown example '$EXAMPLE'"
+        echo "Available examples:"
+        for ex in "${!FEATURES[@]}"; do
+            echo "  $ex"
+        done
+        for ex in "${!TLS_FEATURES[@]}"; do
+            echo "  $ex [TLS]"
+        done
+        exit 1
+    fi
+fi
