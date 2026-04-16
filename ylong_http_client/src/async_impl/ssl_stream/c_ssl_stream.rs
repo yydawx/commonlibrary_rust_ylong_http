@@ -16,7 +16,8 @@ use core::task::{Context, Poll};
 use core::{future, ptr, slice};
 use std::io::{self, Read, Write};
 
-use crate::async_impl::ssl_stream::{check_io_to_poll, Wrapper};
+use crate::async_impl::ssl_stream::check_io_to_poll;
+use crate::c_openssl::bio::Wrapper;
 use crate::c_openssl::verify::PinsVerifyInfo;
 use crate::runtime::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::util::c_openssl::error::ErrorStack;
@@ -84,6 +85,13 @@ where
     /// A convenience method wrapping [`poll_connect`](Self::poll_connect).
     pub(crate) async fn connect(mut self: Pin<&mut Self>) -> Result<(), ssl::SslError> {
         future::poll_fn(|cx| self.as_mut().poll_connect(cx)).await
+    }
+
+    pub(crate) fn into_inner(self) -> S {
+        let inner: ssl::SslStream<Wrapper<S>> = self.0;
+        let wrapper: Wrapper<Wrapper<S>> = inner.into_parts();
+        let inner_wrapper: Wrapper<S> = wrapper.stream;
+        inner_wrapper.stream
     }
 }
 
