@@ -309,8 +309,10 @@ impl ClientBuilder {
     /// let client = ClientBuilder::new().build();
     /// ```
     pub fn build(self) -> Result<Client<HttpConnector>, HttpClientError> {
+        let timeout = self.client.connect_timeout.clone();
         let config = ConnectorConfig {
             proxies: self.proxies,
+            timeout,
             #[cfg(feature = "__tls")]
             tls: self.tls.build()?,
         };

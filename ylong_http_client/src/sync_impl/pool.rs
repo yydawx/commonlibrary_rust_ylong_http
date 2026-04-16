@@ -22,6 +22,7 @@ use crate::error::{ErrorKind, HttpClientError};
 use crate::sync_impl::Connector;
 use crate::util::dispatcher::{Conn, ConnDispatcher, Dispatcher};
 use crate::util::pool::{Pool, PoolKey};
+use crate::util::progress::SpeedConfig;
 
 pub(crate) struct ConnPool<C, S> {
     pool: Pool<PoolKey, Conns<S>>,
@@ -43,7 +44,7 @@ impl<C: Connector> ConnPool<C, C::Stream> {
         );
 
         self.pool
-            .get(key, Conns::new)
+            .get(key, Conns::new, usize::MAX, SpeedConfig::none())
             .conn(|| self.connector.clone().connect(&uri))
     }
 }
@@ -53,7 +54,7 @@ pub(crate) struct Conns<S> {
 }
 
 impl<S> Conns<S> {
-    fn new() -> Self {
+    fn new(_allowed_num: usize, _speed_conf: SpeedConfig) -> Self {
         Self {
             list: Arc::new(Mutex::new(Vec::new())),
         }
