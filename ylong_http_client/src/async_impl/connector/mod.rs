@@ -21,7 +21,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "libc"))]
 use libc::{gid_t, uid_t};
 use ylong_http::request::uri::Uri;
 #[cfg(feature = "http3")]
@@ -250,6 +250,21 @@ mod no_tls {
 
 #[cfg(feature = "__tls")]
 mod tls {
+    #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls"))]
+    use super::eyeballs_connect_with_owner;
+    use super::{eyeballs_connect, Connector, HttpConnector};
+    use crate::async_impl::connector::dns_query;
+    use crate::async_impl::connector::stream::HttpStream;
+    use crate::async_impl::mix::MixStream;
+    #[cfg(feature = "http3")]
+    use crate::async_impl::quic::QuicConn;
+    use crate::async_impl::ssl_stream::AsyncSslStream;
+    use crate::runtime::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, TcpStream};
+    use crate::util::config::{Certificate, HttpVersion};
+    #[cfg(feature = "http2")]
+    use crate::util::information::NegotiateInfo;
+    use crate::util::interceptor::ConnProtocol;
+    use crate::{ConnData, ConnDetail, HttpClientError, TimeGroup, TlsConfig};
     use core::future::Future;
     use core::pin::Pin;
     use std::error;
@@ -257,21 +272,6 @@ mod tls {
     use std::io::{Error, ErrorKind, Write};
     use std::time::Instant;
     use ylong_http::request::uri::{Scheme, Uri};
-    use super::{eyeballs_connect, Connector, HttpConnector};
-    #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls"))]
-    use super::eyeballs_connect_with_owner;
-    use crate::async_impl::connector::dns_query;
-    use crate::async_impl::connector::stream::HttpStream;
-    use crate::async_impl::mix::MixStream;
-    #[cfg(feature = "http3")]
-    use crate::async_impl::quic::QuicConn;
-    use crate::async_impl::ssl_stream::AsyncSslStream;
-    use crate::runtime::{AsyncReadExt, AsyncWriteExt, TcpStream};
-    use crate::util::config::HttpVersion;
-    #[cfg(feature = "http2")]
-    use crate::util::information::NegotiateInfo;
-    use crate::util::interceptor::ConnProtocol;
-    use crate::{ConnData, ConnDetail, HttpClientError, TimeGroup, TlsConfig};
 
     impl Connector for HttpConnector {
         type Stream = HttpStream<MixStream>;
@@ -283,6 +283,7 @@ mod tls {
             let mut addr = uri.authority().unwrap().to_string();
             let mut auth = None;
             let mut is_proxy = false;
+            let mut proxy_tls_config: Option<(Option<Certificate>, bool)> = None;
 
             if let Some(proxy) = self.config.proxies.match_proxy(uri) {
                 addr = proxy.via_proxy(uri).authority().unwrap().to_string();
@@ -293,6 +294,10 @@ mod tls {
                     .as_ref()
                     .and_then(|v| v.to_string().ok());
                 is_proxy = true;
+                if proxy.is_https_proxy() {
+                    proxy_tls_config =
+                        Some((proxy.proxy_ca.clone(), proxy.danger_accept_invalid_proxy));
+                }
             }
             #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls"))]
             let fchown = self.config.fchown.clone();
@@ -410,13 +415,13 @@ mod tls {
                         let socket_addrs = dns_query(resolver, addr.as_str()).await?;
                         time_group.set_dns_end(Instant::now());
                         time_group.set_tcp_start(Instant::now());
-                        #[cfg(not(all(target_os = "linux", feature = "ylong_base", feature = "__tls")))]
-                        let stream = eyeballs_connect(socket_addrs, timeout).await?;
-                        #[cfg(all(
+                        #[cfg(not(all(
                             target_os = "linux",
                             feature = "ylong_base",
-                            feature = "__tls",
-                        ))]
+                            feature = "__tls"
+                        )))]
+                        let stream = eyeballs_connect(socket_addrs, timeout).await?;
+                        #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls",))]
                         let stream = if let Some(fchown) = fchown {
                             eyeballs_connect_with_owner(
                                 socket_addrs,
@@ -438,6 +443,7 @@ mod tls {
                             is_proxy,
                             (auth, host, port),
                             time_group,
+                            proxy_tls_config,
                         )
                         .await
                     })
@@ -453,19 +459,150 @@ mod tls {
         is_proxy: bool,
         (auth, host, port): (Option<String>, String, u16),
         mut time_group: TimeGroup,
+        proxy_tls_config: Option<(Option<Certificate>, bool)>,
     ) -> Result<HttpStream<MixStream>, HttpClientError> {
-        let mut tcp = tcp_stream;
+        let tcp = tcp_stream;
         let local = tcp
             .local_addr()
             .map_err(|e| HttpClientError::from_io_error(crate::ErrorKind::Connect, e))?;
         let peer = tcp
             .peer_addr()
             .map_err(|e| HttpClientError::from_io_error(crate::ErrorKind::Connect, e))?;
+
         if is_proxy {
+            if let Some((proxy_ca, skip_verify)) = proxy_tls_config {
+                let proxy_config = proxy_tls_config_to_tls_config(&config, proxy_ca, skip_verify)?;
+                let proxy_addr = &addr;
+
+                let pinned_key = proxy_config.pinning_host_match(proxy_addr);
+                let mut proxy_ssl_stream = proxy_config
+                    .ssl_new(proxy_addr)
+                    .and_then(|ssl| AsyncSslStream::new(ssl.into_inner(), tcp, pinned_key))
+                    .map_err(|e| {
+                        HttpClientError::from_tls_error(
+                            crate::ErrorKind::Connect,
+                            Error::new(ErrorKind::Other, format!("[proxy] {}", e)),
+                        )
+                    })?;
+
+                time_group.set_tls_start(Instant::now());
+                Pin::new(&mut proxy_ssl_stream)
+                    .connect()
+                    .await
+                    .map_err(|e| {
+                        HttpClientError::from_tls_error(
+                            crate::ErrorKind::Connect,
+                            Error::new(ErrorKind::Other, format!("[proxy] {}", e)),
+                        )
+                    })?;
+                time_group.set_tls_end(Instant::now());
+
+                proxy_ssl_stream = tunnel_over_proxy_tls(proxy_ssl_stream, &host, port, auth)
+                    .await
+                    .map_err(|e| HttpClientError::from_io_error(crate::ErrorKind::Connect, e))?;
+
+                let pinned_key = config.pinning_host_match(addr.as_str());
+                let mut target_ssl_stream = config
+                    .ssl_new(&host)
+                    .and_then(|ssl| {
+                        AsyncSslStream::new(ssl.into_inner(), proxy_ssl_stream, pinned_key)
+                    })
+                    .map_err(|e| {
+                        HttpClientError::from_tls_error(
+                            crate::ErrorKind::Connect,
+                            Error::new(ErrorKind::Other, e),
+                        )
+                    })?;
+
+                time_group.set_tls_start(Instant::now());
+                Pin::new(&mut target_ssl_stream)
+                    .connect()
+                    .await
+                    .map_err(|e| {
+                        HttpClientError::from_tls_error(
+                            crate::ErrorKind::Connect,
+                            Error::new(ErrorKind::Other, e),
+                        )
+                    })?;
+                time_group.set_tls_end(Instant::now());
+
+                #[cfg(feature = "http2")]
+                let alpn = target_ssl_stream.negotiated_alpn_protocol().map(Vec::from);
+                let detail = ConnDetail {
+                    protocol: ConnProtocol::Tcp,
+                    local,
+                    peer,
+                    addr,
+                };
+
+                #[cfg(feature = "http2")]
+                let data = ConnData::builder()
+                    .time_group(time_group)
+                    .proxy(is_proxy)
+                    .negotiate(NegotiateInfo::from_alpn(alpn))
+                    .build(detail);
+
+                #[cfg(not(feature = "http2"))]
+                let data = ConnData::builder()
+                    .time_group(time_group)
+                    .proxy(is_proxy)
+                    .build(detail);
+
+                return Ok(HttpStream::new(
+                    MixStream::HttpsProxy(target_ssl_stream),
+                    data,
+                ));
+            }
+
+            let mut tcp = tcp;
             tcp = tunnel(tcp, &host, port, auth)
                 .await
                 .map_err(|e| HttpClientError::from_io_error(crate::ErrorKind::Connect, e))?;
-        };
+
+            let pinned_key = config.pinning_host_match(addr.as_str());
+            let mut stream = config
+                .ssl_new(&host)
+                .and_then(|ssl| AsyncSslStream::new(ssl.into_inner(), tcp, pinned_key))
+                .map_err(|e| {
+                    HttpClientError::from_tls_error(
+                        crate::ErrorKind::Connect,
+                        Error::new(ErrorKind::Other, e),
+                    )
+                })?;
+
+            time_group.set_tls_start(Instant::now());
+            Pin::new(&mut stream).connect().await.map_err(|e| {
+                HttpClientError::from_tls_error(
+                    crate::ErrorKind::Connect,
+                    Error::new(ErrorKind::Other, e),
+                )
+            })?;
+            time_group.set_tls_end(Instant::now());
+
+            #[cfg(feature = "http2")]
+            let alpn = stream.negotiated_alpn_protocol().map(Vec::from);
+            let detail = ConnDetail {
+                protocol: ConnProtocol::Tcp,
+                local,
+                peer,
+                addr,
+            };
+
+            #[cfg(feature = "http2")]
+            let data = ConnData::builder()
+                .time_group(time_group)
+                .proxy(is_proxy)
+                .negotiate(NegotiateInfo::from_alpn(alpn))
+                .build(detail);
+
+            #[cfg(not(feature = "http2"))]
+            let data = ConnData::builder()
+                .time_group(time_group)
+                .proxy(is_proxy)
+                .build(detail);
+
+            return Ok(HttpStream::new(MixStream::Https(stream), data));
+        }
 
         let pinned_key = config.pinning_host_match(addr.as_str());
         let mut stream = config
@@ -512,6 +649,21 @@ mod tls {
         Ok(HttpStream::new(MixStream::Https(stream), data))
     }
 
+    fn proxy_tls_config_to_tls_config(
+        _base_config: &TlsConfig,
+        proxy_ca: Option<Certificate>,
+        skip_verify: bool,
+    ) -> Result<TlsConfig, HttpClientError> {
+        let mut builder = TlsConfig::builder();
+        if skip_verify {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+        if let Some(ca) = proxy_ca {
+            builder = ca.apply_to_builder(builder);
+        }
+        builder.build()
+    }
+
     async fn tunnel(
         mut conn: TcpStream,
         host: &str,
@@ -538,6 +690,57 @@ mod tls {
 
         loop {
             let n = conn.read(&mut buf[pos..]).await?;
+
+            if n == 0 {
+                return Err(other_io_error(CreateTunnelErr::Unsuccessful));
+            }
+
+            pos += n;
+            let resp = &buf[..pos];
+            if resp.starts_with(b"HTTP/1.1 200") || resp.starts_with(b"HTTP/1.0 200") {
+                if resp.ends_with(b"\r\n\r\n") {
+                    return Ok(conn);
+                }
+                if pos == buf.len() {
+                    return Err(other_io_error(CreateTunnelErr::ProxyHeadersTooLong));
+                }
+            } else if resp.starts_with(b"HTTP/1.1 407") {
+                return Err(other_io_error(CreateTunnelErr::ProxyAuthenticationRequired));
+            } else {
+                return Err(other_io_error(CreateTunnelErr::Unsuccessful));
+            }
+        }
+    }
+
+    async fn tunnel_over_proxy_tls<S>(
+        mut conn: AsyncSslStream<S>,
+        host: &str,
+        port: u16,
+        auth: Option<String>,
+    ) -> Result<AsyncSslStream<S>, Error>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let mut req = Vec::new();
+
+        write!(
+            &mut req,
+            "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+        )?;
+
+        if let Some(value) = auth {
+            write!(&mut req, "Proxy-Authorization: Basic {value}\r\n")?;
+        }
+
+        write!(&mut req, "\r\n")?;
+
+        Pin::new(&mut conn).write_all(&req).await?;
+
+        let mut buf = [0; 8192];
+        let mut pos = 0;
+
+        loop {
+            let n = Pin::new(&mut conn).read(&mut buf[pos..]).await?;
 
             if n == 0 {
                 return Err(other_io_error(CreateTunnelErr::Unsuccessful));
