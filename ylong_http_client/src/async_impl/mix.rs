@@ -21,18 +21,22 @@ use crate::async_impl::ssl_stream::AsyncSslStream;
 use crate::runtime::{AsyncRead, AsyncWrite, ReadBuf, TcpStream};
 
 /// A stream which may be wrapped with TLS.
-pub enum MixStream {
+pub enum MixStream<S = TcpStream> {
     /// A raw HTTP stream.
-    Http(TcpStream),
+    Http(S),
     /// An SSL-wrapped HTTP stream.
-    Https(AsyncSslStream<TcpStream>),
+    Https(AsyncSslStream<S>),
+    /// An SSL-wrapped HTTP stream through an HTTPS proxy (double TLS handshake).
+    HttpsProxy(AsyncSslStream<AsyncSslStream<S>>),
     #[cfg(feature = "http3")]
     /// A Udp connection
     Udp(ConnectedUdpSocket),
 }
 
-impl AsyncRead for MixStream {
-    // poll_read separately.
+impl<S> AsyncRead for MixStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -41,14 +45,17 @@ impl AsyncRead for MixStream {
         match &mut *self {
             MixStream::Http(s) => Pin::new(s).poll_read(cx, buf),
             MixStream::Https(s) => Pin::new(s).poll_read(cx, buf),
+            MixStream::HttpsProxy(s) => Pin::new(s).poll_read(cx, buf),
             #[cfg(feature = "http3")]
             MixStream::Udp(s) => Pin::new(s).poll_recv(cx, buf),
         }
     }
 }
 
-impl AsyncWrite for MixStream {
-    // poll_write separately.
+impl<S> AsyncWrite for MixStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     fn poll_write(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
@@ -57,6 +64,7 @@ impl AsyncWrite for MixStream {
         match &mut *self {
             MixStream::Http(s) => Pin::new(s).poll_write(ctx, buf),
             MixStream::Https(s) => Pin::new(s).poll_write(ctx, buf),
+            MixStream::HttpsProxy(s) => Pin::new(s).poll_write(ctx, buf),
             #[cfg(feature = "http3")]
             MixStream::Udp(s) => Pin::new(s).poll_send(ctx, buf),
         }
@@ -66,6 +74,7 @@ impl AsyncWrite for MixStream {
         match &mut *self {
             MixStream::Http(s) => Pin::new(s).poll_flush(ctx),
             MixStream::Https(s) => Pin::new(s).poll_flush(ctx),
+            MixStream::HttpsProxy(s) => Pin::new(s).poll_flush(ctx),
             #[cfg(feature = "http3")]
             MixStream::Udp(_) => Poll::Ready(Ok(())),
         }
@@ -75,6 +84,7 @@ impl AsyncWrite for MixStream {
         match &mut *self {
             MixStream::Http(s) => Pin::new(s).poll_shutdown(ctx),
             MixStream::Https(s) => Pin::new(s).poll_shutdown(ctx),
+            MixStream::HttpsProxy(s) => Pin::new(s).poll_shutdown(ctx),
             #[cfg(feature = "http3")]
             MixStream::Udp(_) => Poll::Ready(Ok(())),
         }
