@@ -154,6 +154,32 @@ pub(crate) unsafe fn get_stream_mut<'a, S: 'a>(bio: *mut BIO) -> &'a mut S {
     &mut get_state(bio).stream
 }
 
+#[derive(Debug)]
+pub struct Wrapper<S> {
+    pub stream: S,
+    pub context: *mut (),
+}
+
+unsafe impl<S: Send> Send for Wrapper<S> {}
+unsafe impl<S: Sync> Sync for Wrapper<S> {}
+
+impl<S> Wrapper<S> {
+    pub(crate) unsafe fn from_bio(bio: *mut BIO) -> Self {
+        let stream = take_stream(bio);
+        Wrapper {
+            stream,
+            context: ptr::null_mut(),
+        }
+    }
+}
+
+pub(crate) unsafe fn take_stream<S>(bio: *mut BIO) -> S {
+    let state = Box::from_raw(BIO_get_data(bio) as *mut StreamState<S>);
+    BIO_set_data(bio, ptr::null_mut());
+    BIO_set_init(bio, 0);
+    state.stream
+}
+
 pub(crate) fn new<S: Read + Write>(stream: S) -> Result<(*mut BIO, BioMethod), ErrorStack> {
     let bio_method = BioMethod::new::<S>()?;
 
