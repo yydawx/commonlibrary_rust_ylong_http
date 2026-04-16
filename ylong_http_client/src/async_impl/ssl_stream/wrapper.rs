@@ -11,26 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use core::fmt::Debug;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use std::io::{self, Read, Write};
 
+use crate::c_openssl::bio::Wrapper;
 use crate::runtime::{AsyncRead, AsyncWrite, ReadBuf};
 
-#[derive(Debug)]
-pub(crate) struct Wrapper<S> {
-    pub(crate) stream: S,
-    // Context of stream.
-    pub(crate) context: *mut (),
-}
-
 impl<S> Wrapper<S> {
-    /// Gets inner `Stream` and `Context` of `Stream`.
-    ///
-    /// # SAFETY
-    /// Must be called with `context` set to a valid pointer to a live `Context`
-    /// object, and the wrapper must be pinned in memory.
+    pub(crate) fn with_context(mut self, ctx: &mut Context<'_>) -> Self {
+        self.context = ctx as *mut _ as *mut ();
+        self
+    }
+
+    pub(crate) fn clear_context(&mut self) {
+        self.context = ptr::null_mut();
+    }
+
     unsafe fn inner(&mut self) -> (Pin<&mut S>, &mut Context<'_>) {
         debug_assert!(!self.context.is_null());
         let stream = Pin::new_unchecked(&mut self.stream);
@@ -74,11 +71,8 @@ where
     }
 }
 
-// *mut () is not impl Send or Sync.
-unsafe impl<S: Send> Send for Wrapper<S> {}
-unsafe impl<S: Sync> Sync for Wrapper<S> {}
+use std::ptr;
 
-/// Checks `io::Result`.
 pub(crate) fn check_io_to_poll<T>(r: io::Result<T>) -> Poll<io::Result<T>> {
     match r {
         Ok(t) => Poll::Ready(Ok(t)),
