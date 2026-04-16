@@ -13,8 +13,10 @@
 
 #[cfg(feature = "__tls")]
 mod c_ssl_stream;
+#[cfg(feature = "__tls")]
 mod wrapper;
 
 #[cfg(feature = "__tls")]
 pub use c_ssl_stream::AsyncSslStream;
-pub(crate) use wrapper::{check_io_to_poll, Wrapper};
+#[cfg(feature = "__tls")]
+pub(crate) use wrapper::check_io_to_poll;

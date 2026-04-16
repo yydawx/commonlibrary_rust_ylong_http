@@ -17,7 +17,7 @@
 
 #[macro_use]
 mod foreign;
-mod bio;
+pub mod bio;
 pub mod ffi;
 
 pub(crate) mod error;

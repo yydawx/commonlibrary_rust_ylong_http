@@ -17,3 +17,8 @@ pub(crate) use alpn::{AlpnProtocol, AlpnProtocolList};
 mod verifier;
 pub(crate) use verifier::DefaultCertVerifier;
 pub use verifier::{CertVerifier, ServerCerts};
+
+#[cfg(feature = "__tls")]
+pub use crate::util::c_openssl::{
+    Certificate, TlsConfig, TlsConfigBuilder, TlsFileType, TlsVersion,
+};

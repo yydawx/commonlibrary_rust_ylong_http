@@ -30,8 +30,8 @@ pub(crate) mod tls;
 pub(crate) use tls::{AlpnProtocol, AlpnProtocolList};
 #[cfg(feature = "__tls")]
 pub use tls::{CertVerifier, ServerCerts};
-#[cfg(feature = "tls_rust_ssl")]
-pub use tls::{Certificate, PrivateKey, TlsConfig, TlsConfigBuilder, TlsFileType, TlsVersion};
+#[cfg(feature = "__tls")]
+pub use tls::{Certificate, TlsConfig};
 #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls"))]
 mod fchown;
 #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls"))]

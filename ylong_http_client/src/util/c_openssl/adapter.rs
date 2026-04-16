@@ -642,6 +642,13 @@ impl Certificate {
     pub(crate) fn into_inner(self) -> CertificateList {
         self.inner
     }
+
+    pub(crate) fn apply_to_builder(self, builder: TlsConfigBuilder) -> TlsConfigBuilder {
+        match self.inner {
+            CertificateList::PathList(path) => builder.add_path_certificates(path),
+            CertificateList::CertList(_) => builder,
+        }
+    }
 }
 
 #[cfg(test)]
