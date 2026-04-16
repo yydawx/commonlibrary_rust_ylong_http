@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use core::cmp;
+use core::convert::AsRef;
 use core::time::Duration;
 
 use crate::error::HttpClientError;
@@ -448,6 +449,70 @@ impl ProxyBuilder {
         self
     }
 
+    /// Sets a custom CA certificate file for verifying the proxy server's certificate.
+    ///
+    /// This is only applicable for HTTPS proxies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::Proxy;
+    ///
+    /// let builder = Proxy::all("https://proxy.example.com:443")
+    ///     .proxy_ca_file("corporate-ca.pem");
+    /// ```
+    #[cfg(feature = "__tls")]
+    pub fn proxy_ca_file<T: AsRef<str>>(mut self, path: T) -> Self {
+        use crate::util::config::Certificate;
+        self.inner = self.inner.and_then(|mut proxy| {
+            let cert = Certificate::from_path(path.as_ref())?;
+            proxy.set_proxy_ca(cert);
+            Ok(proxy)
+        });
+        self
+    }
+
+    /// Sets a custom CA certificate file for verifying the proxy server's certificate.
+    ///
+    /// This is only applicable for HTTPS proxies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::Proxy;
+    ///
+    /// let builder = Proxy::all("https://proxy.example.com:443")
+    ///     .proxy_ca_file("corporate-ca.pem");
+    /// ```
+    #[cfg(not(feature = "__tls"))]
+    pub fn proxy_ca_file<T: AsRef<str>>(mut self, _path: T) -> Self {
+        // TLS not enabled, return error
+        use crate::{ErrorKind, HttpClientError};
+        self.inner = Err(HttpClientError::from_str(ErrorKind::Build, "TLS not enabled, cannot set proxy CA file"));
+        self
+    }
+
+    /// Configures whether to skip certificate verification for the proxy server.
+    ///
+    /// Defaults to `false` (secure by default).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::Proxy;
+    ///
+    /// // For development/testing only - skips proxy certificate verification
+    /// let builder = Proxy::all("https://proxy.example.com:443")
+    ///     .danger_accept_invalid_proxy_certs(true);
+    /// ```
+    pub fn danger_accept_invalid_proxy_certs(mut self, skip: bool) -> Self {
+        self.inner = self.inner.map(|mut proxy| {
+            proxy.set_danger_accept_invalid_proxy(skip);
+            proxy
+        });
+        self
+    }
+
     /// Constructs a `Proxy`.
     ///
     /// # Examples
@@ -612,5 +677,72 @@ mod ut_settings {
         let proxy = Proxy::https("http://127.0.0.1:6789").build().unwrap();
         let uri = Uri::from_bytes(b"https://127.0.0.1:3456").unwrap();
         assert!(proxy.inner().is_intercepted(&uri));
+    }
+
+    /// UT test cases for `ProxyBuilder::proxy_ca_file`.
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` with `proxy_ca_file` method.
+    /// 2. Checks if the result is built successfully.
+    #[test]
+    fn ut_proxy_ca_file() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_ca_file("test-ca.pem")
+            .build();
+        #[cfg(feature = "__tls")]
+        assert!(proxy.is_ok());
+        #[cfg(not(feature = "__tls"))]
+        assert!(proxy.is_err());
+    }
+
+    /// UT test cases for `ProxyBuilder::proxy_ca_file` with invalid path.
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` with `proxy_ca_file` method using invalid path.
+    /// 2. Checks if the result is an error.
+    #[test]
+    fn ut_proxy_ca_file_invalid() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_ca_file("nonexistent-path/ca.pem")
+            .build();
+        assert!(proxy.is_err());
+    }
+
+    /// UT test cases for `ProxyBuilder::danger_accept_invalid_proxy_certs`.
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` with `danger_accept_invalid_proxy_certs(true)`.
+    /// 2. Checks if the result is built successfully.
+    #[test]
+    fn ut_danger_accept_invalid_proxy_certs() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .danger_accept_invalid_proxy_certs(true)
+            .build();
+        assert!(proxy.is_ok());
+    }
+
+    /// UT test cases for `ProxyBuilder::danger_accept_invalid_proxy_certs` (default).
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` without `danger_accept_invalid_proxy_certs`.
+    /// 2. Checks if the result defaults to false.
+    #[test]
+    fn ut_danger_accept_invalid_proxy_certs_default() {
+        let proxy = Proxy::all("https://proxy.example.com:443").build().unwrap();
+        assert!(!proxy.inner().danger_accept_invalid_proxy);
+    }
+
+    /// UT test cases for HTTPS proxy detection by scheme.
+    ///
+    /// # Brief
+    /// 1. Creates proxies with http:// and https:// schemes.
+    /// 2. Checks if `is_https_proxy()` returns correct values.
+    #[test]
+    fn ut_https_proxy_detection() {
+        let https_proxy = Proxy::all("https://proxy.example.com:443").build().unwrap();
+        assert!(https_proxy.inner().is_https_proxy());
+
+        let http_proxy = Proxy::all("http://proxy.example.com:8080").build().unwrap();
+        assert!(!http_proxy.inner().is_https_proxy());
     }
 }

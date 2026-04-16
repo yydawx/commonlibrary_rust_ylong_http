@@ -23,6 +23,9 @@ use crate::error::HttpClientError;
 use crate::util::base64::encode;
 use crate::util::normalizer::UriFormatter;
 
+#[cfg(feature = "__tls")]
+use crate::util::config::Certificate;
+
 /// `Proxies` is responsible for managing a list of proxies.
 #[derive(Clone, Default)]
 pub(crate) struct Proxies {
@@ -51,6 +54,9 @@ impl Proxies {
 pub(crate) struct Proxy {
     pub(crate) intercept: Intercept,
     pub(crate) no_proxy: Option<NoProxy>,
+    #[cfg(feature = "__tls")]
+    pub(crate) proxy_ca: Option<Certificate>,
+    pub(crate) danger_accept_invalid_proxy: bool,
 }
 
 impl Proxy {
@@ -58,6 +64,9 @@ impl Proxy {
         Self {
             intercept,
             no_proxy: None,
+            #[cfg(feature = "__tls")]
+            proxy_ca: None,
+            danger_accept_invalid_proxy: false,
         }
     }
 
@@ -89,6 +98,19 @@ impl Proxy {
 
     pub(crate) fn no_proxy(&mut self, no_proxy: &str) {
         self.no_proxy = NoProxy::from_str(no_proxy);
+    }
+
+    #[cfg(feature = "__tls")]
+    pub(crate) fn set_proxy_ca(&mut self, cert: Certificate) {
+        self.proxy_ca = Some(cert);
+    }
+
+    pub(crate) fn set_danger_accept_invalid_proxy(&mut self, skip: bool) {
+        self.danger_accept_invalid_proxy = skip;
+    }
+
+    pub(crate) fn is_https_proxy(&self) -> bool {
+        matches!(self.intercept.proxy_info().scheme, Scheme::HTTPS)
     }
 
     pub(crate) fn via_proxy(&self, uri: &Uri) -> Uri {
