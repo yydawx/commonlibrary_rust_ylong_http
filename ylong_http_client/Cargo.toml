@@ -104,3 +104,8 @@ required-features = ["sync", "http1_1"]
 name = "sync_proxy_http"
 path = "examples/sync_proxy_http.rs"
 required-features = ["sync", "http1_1"]
+
+[[example]]
+name = "async_https_proxy"
+path = "examples/async_https_proxy.rs"
+required-features = ["async", "http1_1", "ylong_base"]
