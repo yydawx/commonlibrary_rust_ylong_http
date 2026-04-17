@@ -678,6 +678,12 @@ impl Certificate {
 
     /// Deserializes a list of PEM-formatted certificates.
     pub fn from_path(path: &str) -> Result<Self, HttpClientError> {
+        if !std::path::Path::new(path).exists() {
+            return Err(HttpClientError::from_str(
+                ErrorKind::Build,
+                "Certificate file not found",
+            ));
+        }
         Ok(Certificate {
             inner: CertificateList::PathList(path.to_string()),
         })

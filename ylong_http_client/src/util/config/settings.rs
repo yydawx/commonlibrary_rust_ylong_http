@@ -914,7 +914,7 @@ mod ut_settings {
     #[test]
     fn ut_proxy_ca_file() {
         let proxy = Proxy::all("https://proxy.example.com:443")
-            .proxy_ca_file("test-ca.pem")
+            .proxy_ca_file("tests/file/root-ca.pem")
             .build();
         #[cfg(feature = "__tls")]
         assert!(proxy.is_ok());
