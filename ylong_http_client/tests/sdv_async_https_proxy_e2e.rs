@@ -236,7 +236,7 @@ impl UpstreamServer {
                 .expect("write failed");
             println!("  │     Sent response: HTTP/1.1 200 OK (11 bytes)");
 
-            rx.recv().expect("recv shutdown failed");
+            let _ = rx.recv();
         });
 
         let addr = rx2.recv().expect("recv addr failed");
