@@ -940,6 +940,7 @@ mod ut_settings {
     /// # Brief
     /// 1. Creates a `Proxy` with `danger_accept_invalid_proxy_certs(true)`.
     /// 2. Checks if the result is built successfully.
+    #[cfg(feature = "__tls")]
     #[test]
     fn ut_danger_accept_invalid_proxy_certs() {
         let proxy = Proxy::all("https://proxy.example.com:443")
