@@ -260,7 +260,8 @@ mod tls {
     use crate::async_impl::quic::QuicConn;
     use crate::async_impl::ssl_stream::AsyncSslStream;
     use crate::runtime::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, TcpStream};
-    use crate::util::config::{Certificate, HttpVersion};
+    use crate::util::c_openssl::adapter::TlsConfigBuilder;
+    use crate::util::config::{Certificate, HttpVersion, ProxyTlsConfig};
     #[cfg(feature = "http2")]
     use crate::util::information::NegotiateInfo;
     use crate::util::interceptor::ConnProtocol;
@@ -283,7 +284,7 @@ mod tls {
             let mut addr = uri.authority().unwrap().to_string();
             let mut auth = None;
             let mut is_proxy = false;
-            let mut proxy_tls_config: Option<(Option<Certificate>, bool)> = None;
+            let mut proxy_tls_config: Option<ProxyTlsConfig> = None;
 
             if let Some(proxy) = self.config.proxies.match_proxy(uri) {
                 addr = proxy.via_proxy(uri).authority().unwrap().to_string();
@@ -295,8 +296,7 @@ mod tls {
                     .and_then(|v| v.to_string().ok());
                 is_proxy = true;
                 if proxy.is_https_proxy() {
-                    proxy_tls_config =
-                        Some((proxy.proxy_ca.clone(), proxy.danger_accept_invalid_proxy));
+                    proxy_tls_config = Some(proxy.tls_config.clone());
                 }
             }
             #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls"))]
@@ -459,7 +459,7 @@ mod tls {
         is_proxy: bool,
         (auth, host, port): (Option<String>, String, u16),
         mut time_group: TimeGroup,
-        proxy_tls_config: Option<(Option<Certificate>, bool)>,
+        proxy_tls_config: Option<ProxyTlsConfig>,
     ) -> Result<HttpStream<MixStream>, HttpClientError> {
         let tcp = tcp_stream;
         let local = tcp
@@ -470,8 +470,8 @@ mod tls {
             .map_err(|e| HttpClientError::from_io_error(crate::ErrorKind::Connect, e))?;
 
         if is_proxy {
-            if let Some((proxy_ca, skip_verify)) = proxy_tls_config {
-                let proxy_config = proxy_tls_config_to_tls_config(&config, proxy_ca, skip_verify)?;
+            if let Some(proxy_tls) = proxy_tls_config {
+                let proxy_config = proxy_tls_config_to_tls_config(&config, &proxy_tls)?;
                 let proxy_addr = &addr;
 
                 let pinned_key = proxy_config.pinning_host_match(proxy_addr);
@@ -651,17 +651,12 @@ mod tls {
 
     fn proxy_tls_config_to_tls_config(
         _base_config: &TlsConfig,
-        proxy_ca: Option<Certificate>,
-        skip_verify: bool,
+        proxy_tls: &ProxyTlsConfig,
     ) -> Result<TlsConfig, HttpClientError> {
-        let mut builder = TlsConfig::builder();
-        if skip_verify {
-            builder = builder.danger_accept_invalid_certs(true);
-        }
-        if let Some(ca) = proxy_ca {
-            builder = ca.apply_to_builder(builder);
-        }
-        builder.build()
+        let builder = TlsConfig::builder();
+        proxy_tls
+            .apply_to_builder(builder)
+            .and_then(|b: TlsConfigBuilder| b.build())
     }
 
     async fn tunnel(
