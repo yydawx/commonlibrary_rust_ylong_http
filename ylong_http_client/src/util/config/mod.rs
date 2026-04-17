@@ -14,6 +14,8 @@
 mod client;
 mod connector;
 mod http;
+#[cfg(feature = "__tls")]
+mod proxy_tls_config;
 mod settings;
 
 pub(crate) use client::ClientConfig;
@@ -26,6 +28,8 @@ pub(crate) use http::{HttpConfig, HttpVersion};
 pub use settings::{Proxy, ProxyBuilder, Redirect, Retry, SpeedLimit, Timeout};
 #[cfg(feature = "__tls")]
 pub(crate) mod tls;
+#[cfg(feature = "__tls")]
+pub(crate) use proxy_tls_config::{Identity, PrivateKey, ProxyTlsConfig};
 #[cfg(feature = "__tls")]
 pub(crate) use tls::{AlpnProtocol, AlpnProtocolList};
 #[cfg(feature = "__tls")]

@@ -488,7 +488,10 @@ impl ProxyBuilder {
     pub fn proxy_ca_file<T: AsRef<str>>(mut self, _path: T) -> Self {
         // TLS not enabled, return error
         use crate::{ErrorKind, HttpClientError};
-        self.inner = Err(HttpClientError::from_str(ErrorKind::Build, "TLS not enabled, cannot set proxy CA file"));
+        self.inner = Err(HttpClientError::from_str(
+            ErrorKind::Build,
+            "TLS not enabled, cannot set proxy CA file",
+        ));
         self
     }
 
@@ -505,11 +508,235 @@ impl ProxyBuilder {
     /// let builder = Proxy::all("https://proxy.example.com:443")
     ///     .danger_accept_invalid_proxy_certs(true);
     /// ```
+    #[cfg(feature = "__tls")]
     pub fn danger_accept_invalid_proxy_certs(mut self, skip: bool) -> Self {
         self.inner = self.inner.map(|mut proxy| {
             proxy.set_danger_accept_invalid_proxy(skip);
             proxy
         });
+        self
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    pub fn danger_accept_invalid_proxy_certs(mut self, _skip: bool) -> Self {
+        use crate::{ErrorKind, HttpClientError};
+        self.inner = Err(HttpClientError::from_str(
+            ErrorKind::Build,
+            "TLS not enabled, cannot set danger_accept_invalid_proxy_certs",
+        ));
+        self
+    }
+
+    /// Sets a client certificate and private key for mTLS authentication with the proxy server.
+    ///
+    /// This method sets both the client certificate and private key together, ensuring they
+    /// are properly matched. This is the recommended way to configure mTLS authentication.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::{Proxy, TlsFileType};
+    ///
+    /// let builder = Proxy::all("https://proxy.example.com:443")
+    ///     .proxy_identity("client-cert.pem", "client-key.pem", TlsFileType::PEM);
+    /// ```
+    #[cfg(feature = "__tls")]
+    pub fn proxy_identity<T: AsRef<str>>(
+        mut self,
+        cert_path: T,
+        key_path: T,
+        file_type: crate::TlsFileType,
+    ) -> Self {
+        use crate::util::config::{Certificate, Identity, PrivateKey};
+        self.inner = self.inner.and_then(|mut proxy| {
+            let cert = Certificate::from_path(cert_path.as_ref())?;
+            let key = PrivateKey::from_path(key_path.as_ref(), file_type);
+            proxy.tls_config.identity = Some(Identity::new(cert, key));
+            Ok(proxy)
+        });
+        self
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[doc(hidden)]
+    pub fn proxy_identity<T, U>(mut self, _cert_path: T, _key_path: T, _file_type: U) -> Self {
+        use crate::{ErrorKind, HttpClientError};
+        self.inner = Err(HttpClientError::from_str(
+            ErrorKind::Build,
+            "TLS not enabled, cannot set proxy identity",
+        ));
+        let _ = _cert_path;
+        let _ = _key_path;
+        let _ = _file_type;
+        self
+    }
+
+    #[cfg(feature = "__tls")]
+    #[deprecated(
+        since = "1.1.0",
+        note = "Use proxy_identity() instead for proper mTLS setup"
+    )]
+    pub fn proxy_certificate_file<T: AsRef<str>>(
+        mut self,
+        path: T,
+        file_type: crate::TlsFileType,
+    ) -> Self {
+        use crate::util::config::{Certificate, Identity, PrivateKey};
+        self.inner = self.inner.and_then(|mut proxy| {
+            let cert = Certificate::from_path(path.as_ref())?;
+            let key = PrivateKey::from_path(path.as_ref(), file_type);
+            proxy.tls_config.identity = Some(Identity::new(cert, key));
+            Ok(proxy)
+        });
+        self
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[deprecated(
+        since = "1.1.0",
+        note = "Use proxy_identity() instead for proper mTLS setup"
+    )]
+    pub fn proxy_certificate_file<T, U>(mut self, _path: T, _file_type: U) -> Self {
+        use crate::{ErrorKind, HttpClientError};
+        self.inner = Err(HttpClientError::from_str(
+            ErrorKind::Build,
+            "TLS not enabled, cannot set proxy certificate",
+        ));
+        let _ = _path;
+        let _ = _file_type;
+        self
+    }
+
+    #[cfg(feature = "__tls")]
+    #[deprecated(
+        since = "1.1.0",
+        note = "Use proxy_identity() instead for proper mTLS setup"
+    )]
+    pub fn proxy_private_key_file<T: AsRef<str>>(
+        mut self,
+        path: T,
+        file_type: crate::TlsFileType,
+    ) -> Self {
+        use crate::util::config::{Certificate, Identity, PrivateKey};
+        self.inner = self.inner.and_then(|mut proxy| {
+            let cert = Certificate::from_path(path.as_ref())?;
+            let key = PrivateKey::from_path(path.as_ref(), file_type);
+            proxy.tls_config.identity = Some(Identity::new(cert, key));
+            Ok(proxy)
+        });
+        self
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[deprecated(
+        since = "1.1.0",
+        note = "Use proxy_identity() instead for proper mTLS setup"
+    )]
+    pub fn proxy_private_key_file<T, U>(mut self, _path: T, _file_type: U) -> Self {
+        use crate::{ErrorKind, HttpClientError};
+        self.inner = Err(HttpClientError::from_str(
+            ErrorKind::Build,
+            "TLS not enabled, cannot set proxy private key",
+        ));
+        let _ = _path;
+        let _ = _file_type;
+        self
+    }
+
+    /// Sets a custom TLS cipher suite list for the proxy connection.
+    ///
+    /// This is only applicable for HTTPS proxies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::Proxy;
+    ///
+    /// let builder = Proxy::all("https://proxy.example.com:443")
+    ///     .proxy_cipher_list("ECDHE-RSA-AES256-GCM-SHA384");
+    /// ```
+    #[cfg(feature = "__tls")]
+    pub fn proxy_cipher_list<T: AsRef<str>>(mut self, ciphers: T) -> Self {
+        self.inner = self.inner.map(|mut proxy| {
+            proxy.tls_config.cipher_list = Some(ciphers.as_ref().to_string());
+            proxy
+        });
+        self
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    pub fn proxy_cipher_list<T: AsRef<str>>(mut self, _ciphers: T) -> Self {
+        use crate::{ErrorKind, HttpClientError};
+        self.inner = Err(HttpClientError::from_str(
+            ErrorKind::Build,
+            "TLS not enabled, cannot set proxy cipher list",
+        ));
+        self
+    }
+
+    /// Sets the minimum TLS protocol version for the proxy connection.
+    ///
+    /// This is only applicable for HTTPS proxies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::{Proxy, TlsVersion};
+    ///
+    /// let builder = Proxy::all("https://proxy.example.com:443")
+    ///     .proxy_min_proto_version(TlsVersion::TLS_1_2);
+    /// ```
+    #[cfg(feature = "__tls")]
+    pub fn proxy_min_proto_version(mut self, version: crate::TlsVersion) -> Self {
+        self.inner = self.inner.map(|mut proxy| {
+            proxy.tls_config.min_version = Some(version);
+            proxy
+        });
+        self
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[doc(hidden)]
+    pub fn proxy_min_proto_version<T>(mut self, _version: T) -> Self {
+        use crate::{ErrorKind, HttpClientError};
+        self.inner = Err(HttpClientError::from_str(
+            ErrorKind::Build,
+            "TLS not enabled, cannot set proxy min protocol version",
+        ));
+        let _ = _version;
+        self
+    }
+
+    /// Sets the maximum TLS protocol version for the proxy connection.
+    ///
+    /// This is only applicable for HTTPS proxies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::{Proxy, TlsVersion};
+    ///
+    /// let builder = Proxy::all("https://proxy.example.com:443")
+    ///     .proxy_max_proto_version(TlsVersion::TLS_1_3);
+    /// ```
+    #[cfg(feature = "__tls")]
+    pub fn proxy_max_proto_version(mut self, version: crate::TlsVersion) -> Self {
+        self.inner = self.inner.map(|mut proxy| {
+            proxy.tls_config.max_version = Some(version);
+            proxy
+        });
+        self
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[doc(hidden)]
+    pub fn proxy_max_proto_version<T>(mut self, _version: T) -> Self {
+        use crate::{ErrorKind, HttpClientError};
+        self.inner = Err(HttpClientError::from_str(
+            ErrorKind::Build,
+            "TLS not enabled, cannot set proxy max protocol version",
+        ));
+        let _ = _version;
         self
     }
 
@@ -726,10 +953,137 @@ mod ut_settings {
     /// # Brief
     /// 1. Creates a `Proxy` without `danger_accept_invalid_proxy_certs`.
     /// 2. Checks if the result defaults to false.
+    #[cfg(feature = "__tls")]
     #[test]
     fn ut_danger_accept_invalid_proxy_certs_default() {
         let proxy = Proxy::all("https://proxy.example.com:443").build().unwrap();
-        assert!(!proxy.inner().danger_accept_invalid_proxy);
+        assert!(!proxy.inner().tls_config.skip_verify);
+    }
+
+    /// UT test cases for `ProxyBuilder::proxy_identity`.
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` with `proxy_identity` method.
+    /// 2. Checks if the result is built successfully (TLS mode) or error (non-TLS mode).
+    #[cfg(feature = "__tls")]
+    #[test]
+    fn ut_proxy_identity() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_identity(
+                "tests/file/cert.pem",
+                "tests/file/key.pem",
+                crate::TlsFileType::PEM,
+            )
+            .build();
+        assert!(proxy.is_ok());
+        let proxy = proxy.unwrap();
+        let binding = proxy.inner();
+        let tls_config = binding.tls_config();
+        assert!(tls_config.identity.is_some());
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[test]
+    fn ut_proxy_identity() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_identity("cert.pem", "key.pem", 0u8)
+            .build();
+        assert!(proxy.is_err());
+    }
+
+    /// UT test cases for `ProxyBuilder::proxy_cipher_list`.
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` with `proxy_cipher_list` method.
+    /// 2. Checks if the result is built successfully (TLS mode) or error (non-TLS mode).
+    #[cfg(feature = "__tls")]
+    #[test]
+    fn ut_proxy_cipher_list() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_cipher_list("ECDHE-RSA-AES256-GCM-SHA384")
+            .build();
+        assert!(proxy.is_ok());
+        let proxy = proxy.unwrap();
+        let binding = proxy.inner();
+        let tls_config = binding.tls_config();
+        assert!(tls_config.cipher_list.is_some());
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[test]
+    fn ut_proxy_cipher_list() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_cipher_list("ECDHE-RSA-AES256-GCM-SHA384")
+            .build();
+        assert!(proxy.is_err());
+    }
+
+    /// UT test cases for `ProxyBuilder::proxy_min_proto_version`.
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` with `proxy_min_proto_version` method.
+    /// 2. Checks if the result is built successfully (TLS mode) or error (non-TLS mode).
+    #[cfg(feature = "__tls")]
+    #[test]
+    fn ut_proxy_min_proto_version() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_min_proto_version(crate::TlsVersion::TLS_1_2)
+            .build();
+        assert!(proxy.is_ok());
+        let proxy = proxy.unwrap();
+        let binding = proxy.inner();
+        let tls_config = binding.tls_config();
+        assert!(tls_config.min_version.is_some());
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[test]
+    fn ut_proxy_min_proto_version() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_min_proto_version(0u8)
+            .build();
+        assert!(proxy.is_err());
+    }
+
+    /// UT test cases for `ProxyBuilder::proxy_max_proto_version`.
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` with `proxy_max_proto_version` method.
+    /// 2. Checks if the result is built successfully (TLS mode) or error (non-TLS mode).
+    #[cfg(feature = "__tls")]
+    #[test]
+    fn ut_proxy_max_proto_version() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_max_proto_version(crate::TlsVersion::TLS_1_3)
+            .build();
+        assert!(proxy.is_ok());
+        let proxy = proxy.unwrap();
+        let binding = proxy.inner();
+        let tls_config = binding.tls_config();
+        assert!(tls_config.max_version.is_some());
+    }
+
+    #[cfg(not(feature = "__tls"))]
+    #[test]
+    fn ut_proxy_max_proto_version() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .proxy_max_proto_version(0u8)
+            .build();
+        assert!(proxy.is_err());
+    }
+
+    /// UT test cases for `ProxyBuilder::danger_accept_invalid_proxy_certs` in non-TLS mode.
+    ///
+    /// # Brief
+    /// 1. Creates a `Proxy` with `danger_accept_invalid_proxy_certs` in non-TLS mode.
+    /// 2. Checks if the result is an error.
+    #[cfg(not(feature = "__tls"))]
+    #[test]
+    fn ut_danger_accept_invalid_proxy_certs_non_tls() {
+        let proxy = Proxy::all("https://proxy.example.com:443")
+            .danger_accept_invalid_proxy_certs(true)
+            .build();
+        assert!(proxy.is_err());
     }
 
     /// UT test cases for HTTPS proxy detection by scheme.
