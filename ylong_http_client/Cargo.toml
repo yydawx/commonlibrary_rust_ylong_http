@@ -26,7 +26,7 @@ full = [
     "sync",
     "async",
     "http1_1",
-    "tls_default",
+    "tls",
 ]
 
 sync = []                               # Uses sync interfaces.
@@ -38,7 +38,8 @@ http3 = ["ylong_http/http3", "quiche", "ylong_http/huffman"]     # Uses HTTP/3.
 tokio_base = ["tokio", "ylong_http/tokio_base"]                  # Uses tokio runtime.
 ylong_base = ["ylong_runtime", "ylong_http/ylong_base"]          # Uses ylong runtime.
 
-tls_default = ["c_openssl_3_0"]
+tls = ["c_openssl_3_0"]                 # Uses TLS with default implementation.
+tls_default = ["tls"]                    # Deprecated: use tls instead.
 __tls = []                              # Not open to user, only mark to use tls for developer.
 __c_openssl = ["__tls", "libc"]         # Not open to user, only mark to use tls by C-openssl for developer.
 c_openssl_1_1 = ["__c_openssl"]         # Uses TLS by FFI of C-openssl 1.1.
@@ -108,4 +109,9 @@ required-features = ["sync", "http1_1"]
 [[example]]
 name = "async_https_proxy"
 path = "examples/async_https_proxy.rs"
-required-features = ["async", "http1_1", "ylong_base"]
+required-features = ["async", "http1_1", "ylong_base", "tls"]
+
+[[example]]
+name = "async_https_proxy_e2e"
+path = "examples/async_https_proxy_e2e.rs"
+required-features = ["async", "http1_1", "ylong_base", "tls"]
