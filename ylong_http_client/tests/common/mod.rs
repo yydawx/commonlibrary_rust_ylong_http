@@ -17,6 +17,8 @@ mod async_utils;
 #[cfg(feature = "sync")]
 mod sync_utils;
 
+pub mod mitmproxy;
+
 use tokio::runtime::Runtime;
 
 #[macro_export]
