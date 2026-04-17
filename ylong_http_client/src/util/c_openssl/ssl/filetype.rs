@@ -16,7 +16,15 @@ use libc::c_int;
 const X509_FILETYPE_PEM: c_int = 1;
 const X509_FILETYPE_ASN1: c_int = 2;
 
+#[derive(Clone)]
 pub(crate) struct SslFiletype(c_int);
+
+impl Default for SslFiletype {
+    fn default() -> Self {
+        Self(X509_FILETYPE_PEM)
+    }
+}
+
 impl SslFiletype {
     pub(crate) const PEM: SslFiletype = SslFiletype(X509_FILETYPE_PEM);
     pub(crate) const ASN1: SslFiletype = SslFiletype(X509_FILETYPE_ASN1);
