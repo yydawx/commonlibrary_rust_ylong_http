@@ -47,6 +47,7 @@ pub struct TlsConfigBuilder {
     certs_list: Vec<Cert>,
     pins: Option<PubKeyPins>,
     paths_list: Vec<String>,
+    private_key: Option<(String, SslFiletype)>,
 }
 
 impl TlsConfigBuilder {
@@ -68,6 +69,7 @@ impl TlsConfigBuilder {
             certs_list: vec![],
             pins: None,
             paths_list: vec![],
+            private_key: None,
         }
     }
 
@@ -226,6 +228,26 @@ impl TlsConfigBuilder {
         self
     }
 
+    /// Sets the private key from a file.
+    ///
+    /// This is typically used for client certificate authentication.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::{TlsConfigBuilder, TlsFileType};
+    ///
+    /// let builder = TlsConfigBuilder::new()
+    ///     .private_key_file("client-key.pem", TlsFileType::PEM);
+    /// ```
+    pub fn private_key_file<T: AsRef<Path>>(mut self, path: T, file_type: TlsFileType) -> Self {
+        self.private_key = Some((
+            path.as_ref().to_string_lossy().to_string(),
+            file_type.into_inner(),
+        ));
+        self
+    }
+
     // Sets the protocols to sent to the server for Application Layer Protocol
     // Negotiation (ALPN).
     //
@@ -379,6 +401,14 @@ impl TlsConfigBuilder {
             });
         }
 
+        if let Some((key_path, file_type)) = self.private_key {
+            self.inner = self.inner.and_then(|mut builder| {
+                builder
+                    .set_private_key_file(key_path, file_type)
+                    .map(|_| builder)
+            });
+        }
+
         let ctx = self
             .inner
             .map(|builder| builder.build())
@@ -487,6 +517,7 @@ impl TlsSsl {
 ///
 /// let version = TlsVersion::TLS_1_2;
 /// ```
+#[derive(Clone, Copy)]
 pub struct TlsVersion(SslVersion);
 
 impl TlsVersion {
@@ -513,7 +544,14 @@ impl TlsVersion {
 ///
 /// let file_type = TlsFileType::PEM;
 /// ```
+#[derive(Clone)]
 pub struct TlsFileType(SslFiletype);
+
+impl Default for TlsFileType {
+    fn default() -> Self {
+        Self(SslFiletype::default())
+    }
+}
 
 impl TlsFileType {
     /// Constant for PEM file type.
@@ -608,7 +646,7 @@ impl Cert {
 ///     let certs = Certificate::from_pem(pem);
 /// }
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Certificate {
     inner: CertificateList,
 }
@@ -617,6 +655,12 @@ pub struct Certificate {
 pub(crate) enum CertificateList {
     CertList(Vec<Cert>),
     PathList(String),
+}
+
+impl Default for CertificateList {
+    fn default() -> Self {
+        Self::CertList(Vec::new())
+    }
 }
 
 impl Certificate {
