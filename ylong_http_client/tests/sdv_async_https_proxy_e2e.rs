@@ -434,93 +434,6 @@ fn sdv_async_https_proxy_mitmproxy_mtls() {
     print_test_passed();
 }
 
-/// SDV test: HTTPS proxy with custom cipher suites.
-#[test]
-fn sdv_async_https_proxy_mitmproxy_custom_ciphers() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
-    print_header("Test: HTTPS Proxy (Custom Cipher Suites)");
-    println!();
-    println!("  Configuration:");
-    print_config("Proxy URL", "https://127.0.0.1:<port>");
-    print_config("TLS Verify", "SKIPPED");
-    print_config("Cipher Suite", "ECDHE-RSA-AES256-GCM-SHA384");
-
-    print_step("Step 1", "Start upstream HTTP server");
-    let upstream = UpstreamServer::new();
-    print_detail("Address", &upstream.addr);
-    print_ok("Upstream server started");
-
-    print_step("Step 2", "Start mitmproxy container");
-    let mitmproxy = match MitmproxyServer::new() {
-        Ok(m) => m,
-        Err(e) => {
-            print_fail(&e);
-            println!();
-            println!("  ⚠ Skipping test: Docker/mitmproxy not available");
-            return;
-        }
-    };
-
-    print_step("Step 3", "Build proxy configuration with cipher list");
-    let proxy_url = mitmproxy.proxy_url().replace("http://", "https://");
-    print_detail("Proxy URL", &proxy_url);
-    print_detail("Upstream Target", &upstream.host_url());
-    print_detail("Cipher List", "ECDHE-RSA-AES256-GCM-SHA384");
-
-    let proxy = Proxy::all(proxy_url.as_str())
-        .danger_accept_invalid_proxy_certs(true)
-        .proxy_cipher_list("ECDHE-RSA-AES256-GCM-SHA384")
-        .build();
-
-    let proxy = match proxy {
-        Ok(p) => p,
-        Err(e) => {
-            print_fail(&format!("Proxy build failed: {}", e));
-            return;
-        }
-    };
-    print_ok("Proxy with custom cipher built");
-
-    print_step("Step 4", "Build HTTP client");
-    let client = match ClientBuilder::new().proxy(proxy).build() {
-        Ok(c) => c,
-        Err(e) => {
-            print_fail(&format!("Client build failed: {}", e));
-            return;
-        }
-    };
-    print_ok("Client built successfully");
-
-    print_step("Step 5", "Send HTTP request with custom cipher");
-    let url = format!("{}/test", upstream.host_url());
-    print_detail("Request", &format!("GET {} HTTP/1.1", url));
-    print_detail("TLS Cipher", "ECDHE-RSA-AES256-GCM-SHA384");
-
-    let result = ylong_runtime::block_on(async {
-        let request = Request::builder()
-            .url(url.as_str())
-            .body(Body::empty())
-            .expect("Request build failed");
-
-        client.request(request).await
-    });
-
-    match result {
-        Ok(response) => {
-            print_detail("Response Status", &response.status().as_u16().to_string());
-            assert_eq!(response.status().as_u16(), 200);
-            print_ok("Request with custom cipher completed");
-        }
-        Err(e) => {
-            mitmproxy.container_logs();
-            print_fail(&format!("Request failed: {}", e));
-            panic!("Test failed: {}", e);
-        }
-    }
-
-    print_test_passed();
-}
-
 /// SDV test: HTTPS proxy with TLS version restrictions.
 #[test]
 fn sdv_async_https_proxy_mitmproxy_tls_version() {
@@ -600,6 +513,248 @@ fn sdv_async_https_proxy_mitmproxy_tls_version() {
             print_detail("Response Status", &response.status().as_u16().to_string());
             assert_eq!(response.status().as_u16(), 200);
             print_ok("Request with TLS version restriction completed");
+        }
+        Err(e) => {
+            mitmproxy.container_logs();
+            print_fail(&format!("Request failed: {}", e));
+            panic!("Test failed: {}", e);
+        }
+    }
+
+    print_test_passed();
+}
+
+/// SDV test: HTTPS proxy with CA certificate verification.
+#[test]
+fn sdv_async_https_proxy_mitmproxy_ca_verification() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+    print_header("Test: HTTPS Proxy (CA Certificate Verification)");
+    println!();
+    println!("  Configuration:");
+    print_config("Proxy URL", "https://127.0.0.1:<port>");
+    print_config("TLS Verify", "ENABLED (using mitmproxy CA)");
+    print_config("CA Certificate", "~/.mitmproxy/mitmproxy-ca-cert.pem");
+
+    print_step("Step 1", "Generate mitmproxy CA certificate");
+    let ca_cert_path = std::env::var("HOME")
+        .map(|h| format!("{}/.mitmproxy/mitmproxy-ca-cert.pem", h))
+        .unwrap_or_else(|_| "/tmp/mitmproxy-ca-cert.pem".to_string());
+
+    std::fs::create_dir_all(
+        std::path::Path::new(&ca_cert_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("/tmp")),
+    )
+    .ok();
+
+    let cert_exists = std::path::Path::new(&ca_cert_path).exists();
+    if !cert_exists {
+        println!("  │  Starting mitmproxy to generate CA cert...");
+        let output = Command::new("docker")
+            .args([
+                "run",
+                "-d",
+                "--rm",
+                "--network=host",
+                "--entrypoint",
+                "mitmdump",
+                MITMPROXY_IMAGE,
+                "--listen-port",
+                "0",
+                "--generate-upstream-cert-chain-only",
+            ])
+            .output();
+        if output.is_ok() {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            Command::new("docker").args(["ps", "-q"]).output().map(|o| {
+                let id = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !id.is_empty() {
+                    let _ = Command::new("docker").args(["rm", "-f", &id]).output();
+                }
+            });
+        }
+    }
+    print_detail("CA Cert Path", &ca_cert_path);
+
+    let ca_cert = match std::path::Path::new(&ca_cert_path).exists() {
+        true => {
+            print_ok("mitmproxy CA cert generated");
+            ca_cert_path
+        }
+        false => {
+            print_fail("CA cert not found");
+            println!();
+            println!("  ⚠ Skipping CA verification test (CA cert generation requires mitmproxy first run)");
+            return;
+        }
+    };
+
+    print_step("Step 2", "Start upstream HTTP server");
+    let upstream = UpstreamServer::new();
+    print_detail("Address", &upstream.addr);
+    print_ok("Upstream server started");
+
+    print_step("Step 3", "Start mitmproxy container");
+    let mitmproxy = match MitmproxyServer::new() {
+        Ok(m) => m,
+        Err(e) => {
+            print_fail(&e);
+            println!();
+            println!("  ⚠ Skipping test: Docker/mitmproxy not available");
+            return;
+        }
+    };
+
+    print_step("Step 4", "Build proxy configuration with CA verification");
+    let proxy_url = mitmproxy.proxy_url().replace("http://", "https://");
+    print_detail("Proxy URL", &proxy_url);
+    print_detail("Upstream Target", &upstream.host_url());
+    print_detail("CA Certificate", &ca_cert);
+
+    let proxy = Proxy::all(proxy_url.as_str())
+        .proxy_ca_file(&ca_cert)
+        .build();
+
+    let proxy = match proxy {
+        Ok(p) => p,
+        Err(e) => {
+            print_fail(&format!("Proxy build failed: {}", e));
+            return;
+        }
+    };
+    print_ok("Proxy with CA verification built");
+
+    print_step("Step 5", "Build HTTP client");
+    let client = match ClientBuilder::new().proxy(proxy).build() {
+        Ok(c) => c,
+        Err(e) => {
+            print_fail(&format!("Client build failed: {}", e));
+            return;
+        }
+    };
+    print_ok("Client built successfully");
+
+    print_step("Step 6", "Send HTTP request with CA verification");
+    let url = format!("{}/test", upstream.host_url());
+    print_detail("Request", &format!("GET {} HTTP/1.1", url));
+    print_detail("TLS Verify", "CA certificate verification enabled");
+
+    let result = ylong_runtime::block_on(async {
+        let request = Request::builder()
+            .url(url.as_str())
+            .body(Body::empty())
+            .expect("Request build failed");
+
+        client.request(request).await
+    });
+
+    match result {
+        Ok(response) => {
+            print_detail("Response Status", &response.status().as_u16().to_string());
+            assert_eq!(response.status().as_u16(), 200);
+            print_ok("Request with CA verification completed");
+        }
+        Err(e) => {
+            mitmproxy.container_logs();
+            print_fail(&format!("Request failed: {}", e));
+            panic!("Test failed: {}", e);
+        }
+    }
+
+    print_test_passed();
+}
+
+/// SDV test: HTTPS proxy with full TLS configuration (all options combined).
+#[test]
+fn sdv_async_https_proxy_mitmproxy_full_config() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+    print_header("Test: HTTPS Proxy (Full TLS Configuration)");
+    println!();
+    println!("  Configuration:");
+    print_config("Proxy URL", "https://127.0.0.1:<port>");
+    print_config("TLS Verify", "SKIPPED");
+    print_config("Client Auth", "mTLS (cert + key)");
+    print_config("Cipher Suite", "ECDHE-RSA-AES256-GCM-SHA384");
+    print_config("Min TLS Version", "TLS 1.2");
+    print_config("Max TLS Version", "TLS 1.3");
+
+    print_step("Step 1", "Start upstream HTTP server");
+    let upstream = UpstreamServer::new();
+    print_detail("Address", &upstream.addr);
+    print_ok("Upstream server started");
+
+    print_step("Step 2", "Start mitmproxy with mTLS support");
+    let mitmproxy = match MitmproxyServer::new_with_mtls() {
+        Ok(m) => m,
+        Err(e) => {
+            print_fail(&e);
+            println!();
+            println!("  ⚠ Skipping test: Docker/mitmproxy not available");
+            return;
+        }
+    };
+
+    print_step("Step 3", "Build proxy configuration with ALL options");
+    let proxy_url = mitmproxy.proxy_url().replace("http://", "https://");
+    print_detail("Proxy URL", &proxy_url);
+    print_detail("Upstream Target", &upstream.host_url());
+    print_detail("mTLS Identity", "cert.pem + key.pem");
+    print_detail("Cipher List", "ECDHE-RSA-AES256-GCM-SHA384");
+    print_detail("Min Version", "TLS_1_2");
+    print_detail("Max Version", "TLS_1_3");
+
+    let proxy = Proxy::all(proxy_url.as_str())
+        .danger_accept_invalid_proxy_certs(true)
+        .proxy_identity(
+            "tests/file/cert.pem",
+            "tests/file/key.pem",
+            ylong_http_client::TlsFileType::PEM,
+        )
+        .proxy_cipher_list("ECDHE-RSA-AES256-GCM-SHA384")
+        .proxy_min_proto_version(ylong_http_client::TlsVersion::TLS_1_2)
+        .proxy_max_proto_version(ylong_http_client::TlsVersion::TLS_1_3)
+        .build();
+
+    let proxy = match proxy {
+        Ok(p) => p,
+        Err(e) => {
+            print_fail(&format!("Proxy build failed: {}", e));
+            return;
+        }
+    };
+    print_ok("Proxy with full TLS config built");
+
+    print_step("Step 4", "Build HTTP client");
+    let client = match ClientBuilder::new().proxy(proxy).build() {
+        Ok(c) => c,
+        Err(e) => {
+            print_fail(&format!("Client build failed: {}", e));
+            return;
+        }
+    };
+    print_ok("Client built successfully");
+
+    print_step("Step 5", "Send HTTP request with full TLS config");
+    let url = format!("{}/test", upstream.host_url());
+    print_detail("Request", &format!("GET {} HTTP/1.1", url));
+    print_detail("mTLS", "Client certificate + private key");
+    print_detail("Cipher", "ECDHE-RSA-AES256-GCM-SHA384");
+    print_detail("TLS Version", "1.2 ~ 1.3");
+
+    let result = ylong_runtime::block_on(async {
+        let request = Request::builder()
+            .url(url.as_str())
+            .body(Body::empty())
+            .expect("Request build failed");
+
+        client.request(request).await
+    });
+
+    match result {
+        Ok(response) => {
+            print_detail("Response Status", &response.status().as_u16().to_string());
+            assert_eq!(response.status().as_u16(), 200);
+            print_ok("Request with full TLS config completed");
         }
         Err(e) => {
             mitmproxy.container_logs();
