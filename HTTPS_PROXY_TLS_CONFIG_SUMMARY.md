@@ -382,6 +382,10 @@ pub fn proxy_identity<T, U>(...) -> Self {
 | `sdv_async_https_proxy_mitmproxy_mtls` | HTTPS 代理 + mTLS 双向认证 | ✓ PASSED |
 | `sdv_async_https_proxy_mitmproxy_custom_ciphers` | HTTPS 代理 + 自定义加密套件 | ✓ PASSED |
 | `sdv_async_https_proxy_mitmproxy_tls_version` | HTTPS 代理 + TLS 版本限制 | ✓ PASSED |
+| `sdv_async_https_proxy_mitmproxy_ca_verification` | HTTPS 代理 + CA 证书验证 | ✓ PASSED/SKIPPED* |
+| `sdv_async_https_proxy_mitmproxy_full_config` | HTTPS 代理 + 完整 TLS 配置 | ✓ PASSED |
+
+* CA 验证测试会在 mitmproxy CA 证书不存在时优雅跳过
 
 #### 测试环境
 
@@ -489,6 +493,8 @@ cargo test --test sdv_async_https_proxy_e2e \
 ## 九、Git 提交历史
 
 ```
+90ccdc3 Add CA verification and full config E2E tests
+5dc675e docs: update summary with E2E test details
 ca8a3ee Fix UpstreamServer shutdown panic
 7c17602 Add E2E tests for HTTPS proxy TLS configuration
 b0c3ed3 fix: unify tls feature names (tls_default -> tls)
