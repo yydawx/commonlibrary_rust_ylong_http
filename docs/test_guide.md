@@ -28,7 +28,9 @@
 
 > **注意**: `tokio_base` 和 `ylong_base` 互斥，不能同时启用。
 
-## ylong\_http\_client/examples
+***
+
+## 示例说明
 
 ### ⚠️ 不可用示例（sync 代码未完成）
 
@@ -43,183 +45,80 @@
 
 #### 普通示例 (5个)
 
-1. **async\_redirect\_http.rs** - 异步HTTP重定向
-   - 依赖: `async`, `http1_1`, `tokio_base`
-   - 需要本地 HTTP 服务器（127.0.0.1:3000）
-2. **async\_proxy\_http.rs** - 异步HTTP代理
-   - 依赖: `async`, `http1_1`, `tokio_base`
-   - 需要本地 HTTP 服务器（127.0.0.1:3000）
+1. **async\_http.rs** - 异步HTTP
+   - 依赖: `async`, `http1_1`, `ylong_base`
+2. **async\_http\_dns.rs** - 异步HTTP + DNS
+   - 依赖: `async`, `http1_1`, `ylong_base`
 3. **async\_http\_multi.rs** - 异步HTTP多请求
    - 依赖: `async`, `http1_1`, `ylong_base`
-4. **async\_http\_dns.rs** - 异步HTTP + DNS
-   - 依赖: `async`, `http1_1`, `ylong_base`
-5. **async\_http.rs** - 异步HTTP
-   - 依赖: `async`, `http1_1`, `ylong_base`
+4. **async\_proxy\_http.rs** - 异步HTTP代理
+   - 依赖: `async`, `http1_1`, `tokio_base`
+   - 需要本地 HTTP 服务器（127.0.0.1:3000）
+5. **async\_redirect\_http.rs** - 异步HTTP重定向
+   - 依赖: `async`, `http1_1`, `tokio_base`
+   - 需要本地 HTTP 服务器（127.0.0.1:3000）
 
 #### TLS 示例 (3个)
 
-1. **async\_http\_doh.rs** - 异步HTTP + DoH (DNS over HTTPS)
-   - 依赖: `async`, `http1_1`, `ylong_base`, `__c_openssl`, `c_openssl_3_0`
-   - 需要配置 TLS 环境变量（见下方说明）
-2. **async\_certs\_adapter.rs** - 异步证书适配器
-   - 依赖: `async`, `http1_1`, `ylong_base`, `__c_openssl`, `c_openssl_3_0`
-   - 需要配置 TLS 环境变量（见下方说明）
-3. **async\_https\_outside.rs** - 异步HTTPS（外部）
+1. **async\_https\_outside.rs** - 异步HTTPS（外部）
    - 依赖: `async`, `http1_1`, `__tls`, `__c_openssl`, `c_openssl_3_0`, `tokio_base`
-   - 需要配置 TLS 环境变量（见下方说明）
+2. **async\_http\_doh.rs** - 异步HTTP + DoH (DNS over HTTPS)
+   - 依赖: `async`, `http1_1`, `ylong_base`, `__c_openssl`, `c_openssl_3_0`
+3. **async\_certs\_adapter.rs** - 异步证书适配器
+   - 依赖: `async`, `http1_1`, `ylong_base`, `__c_openssl`, `c_openssl_3_0`
 
-### 使用 tokio\_base 的 examples
-
-- async\_redirect\_http, async\_proxy\_http, async\_https\_outside
-
-### 使用 ylong\_base 的 examples
-
-- async\_http, async\_http\_dns, async\_http\_multi, async\_http\_doh, async\_certs\_adapter
-
-***
-
-## Test 脚本说明
-
-### ylong\_http\_client/test
-
-运行所有可用示例：
+#### 运行示例
 
 ```bash
+# 使用 test 脚本运行所有示例（自动配置 OpenSSL）
 cd ylong_http_client && ./test all
-```
 
-运行单个示例：
-
-```bash
+# 运行单个示例
 cd ylong_http_client && ./test async_http
 ```
 
-#### 测试结果说明
-
-- **编译成功，运行失败**：部分示例（如 async\_proxy\_http、async\_redirect\_http）需要本地 HTTP 服务器在 127.0.0.1:3000 运行，否则会报 "Connection refused" 错误。这是正常行为，不是代码问题。
-- **TLS 示例**：需要正确配置 TLS 环境变量才能运行（见下方说明）。
-
-#### 配置文件说明
-
-脚本会自动添加 `libc` feature，无需手动指定。
-
-### ylong\_http/test
-
-运行所有示例：
-
-```bash
-cd ylong_http && ./test all
-```
-
-运行单个示例：
-
-```bash
-cd ylong_http && ./test mimebody_multi
-cd ylong_http && ./test mimebody_multi_then_async_data
-```
-
 ***
 
-## cargo test 说明
+## 单元测试
 
-### 运行单元测试
+### 运行库测试
 
 ```bash
 cd ylong_http_client
-cargo test --features=async,http1_1,ylong_base
+
+# 无 TLS
+cargo test --lib --features "async,http1_1,ylong_base,libc"
+
+# 有 TLS
+cargo test --lib --features "async,http1_1,tls,ylong_base,libc"
 ```
 
-### 编译问题排查
+### 测试结果
 
-#### 问题: HTTPS 代理场景编译失败
-
-在启用 TLS 特性 (`__tls`) 时编译可能遇到以下错误：
-
-1. **缺失 `tunnel_over_proxy_tls` 函数**
-   ```
-   error[E0425]: cannot find function `tunnel_over_proxy_tls` in this scope
-   ```
-   **解决方案**: 确保 TLS 模块中保留了 `tunnel_over_proxy_tls` 函数（用于 HTTPS 代理 + TLS 场景）
-
-2. **Future 不满足 `Sync` 约束**
-   ```
-   future created by async block is not `Sync`
-   ```
-   **解决方案**: 为 `Tunnel` trait 的 `establish` 方法添加 `Sync` bound：
-   ```rust
-   fn establish(...) -> Pin<Box<dyn Future<Output = Result<Self::Stream, TunnelError>> + Send + Sync + '_>>;
-   ```
-
-3. **关联类型 `Stream` 找不到**
-   ```
-   error[E0220]: associated type `Stream` not found for `C`
-   ```
-   **解决方案**: 在使用 `C::Stream` 的文件中添加 `Tunnel` trait 导入：
-   ```rust
-   #[cfg(feature = "__tls")]
-   use crate::proxy::tunnel::Tunnel;
-   ```
-
-#### 推荐编译命令
-
-```bash
-# 基础编译（无 TLS）
-cargo build --features "async,http1_1,ylong_base,libc"
-
-# TLS 编译（完整特性）
-cargo build --features "async,http1_1,tls,ylong_base,libc"
-```
-
-##
-
-***
-
-## 补充说明
-
-### TLS 运行要求
-
-运行 TLS 相关示例需要设置以下环境变量：
-
-- `OPENSSL_LIB_DIR` - OpenSSL 库目录
-- `OPENSSL_INCLUDE_DIR` - OpenSSL 头文件目录
-- `RUSTFLAGS` - 链接参数
-
-**示例（Ubuntu/Debian）：**
-```bash
-export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
-export OPENSSL_INCLUDE_DIR=/usr/include
-export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
-```
-
-> **注意**: `ylong_http_client/test` 脚本已自动配置这些环境变量，直接运行 `./test all` 即可。
-
-### 测试结果说明
-
+- **库测试**: 154 个测试全部通过
 - **依赖本地服务器的示例**（如 `async_proxy_http`、`async_redirect_http`）需要本地 HTTP 服务器在 `127.0.0.1:3000` 运行，否则会报 "Connection refused"，这是正常行为
-- **TLS 示例**（如 `async_https_outside`、`async_certs_adapter`）需要正确配置 OpenSSL 环境变量
 
 ***
 
-## HTTPS 代理 E2E 测试
+## E2E 测试
 
-### 概述
+### HTTPS 代理 E2E 测试
 
-E2E 测试使用 mitmproxy 容器模拟 HTTPS 代理服务器，验证以下功能：
+使用 mitmproxy 容器模拟 HTTPS 代理服务器，验证以下功能：
 - HTTP CONNECT 隧道建立
-- HTTPS 代理（无 TLS）
-- HTTPS 代理（TLS 加密）
+- HTTPS 代理（无 TLS / TLS 加密）
 - mTLS（双向 TLS 认证）
 - TLS 版本和加密套件配置
 
-### 前置要求
+#### 前置要求
 
 1. **Docker** - 需要 Docker 运行环境
-2. **mitmproxy 镜像** - 测试会自动拉取（或使用预置镜像）
+2. **mitmproxy 镜像** - 测试会自动拉取
    ```
    swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mitmproxy/mitmproxy:11.0
    ```
 
-### 运行命令
+#### 运行命令
 
 ```bash
 cd ylong_http_client
@@ -233,7 +132,7 @@ export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
 cargo test --test sdv_async_https_proxy_e2e --features "async,http1_1,tls,ylong_base,libc" -- --nocapture
 ```
 
-### 预期结果
+#### 预期结果
 
 ```
 ✅ sdv_async_https_proxy               - 通过
@@ -241,10 +140,9 @@ cargo test --test sdv_async_https_proxy_e2e --features "async,http1_1,tls,ylong_
 ✅ sdv_async_https_proxy_tls           - 通过
 ✅ sdv_async_https_proxy_mitmproxy_full_config     - 通过
 ✅ sdv_async_https_proxy_mitmproxy_tls_version     - 通过
-✅ sdv_async_https_proxy_mitmproxy_ca_verification - 跳过（可选）
 ```
 
-### 故障排查
+#### 故障排查
 
 1. **"Connection refused" 错误**
    - Docker 容器可能未正常启动
@@ -256,3 +154,95 @@ cargo test --test sdv_async_https_proxy_e2e --features "async,http1_1,tls,ylong_
 
 3. **镜像拉取慢**
    - 测试前手动拉取：`docker pull swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mitmproxy/mitmproxy:11.0`
+
+***
+
+## 编译指南
+
+### 推荐编译命令
+
+```bash
+# 基础编译（无 TLS）
+cargo build --features "async,http1_1,ylong_base,libc"
+
+# TLS 编译（完整特性）
+cargo build --features "async,http1_1,tls,ylong_base,libc"
+```
+
+### 编译问题排查
+
+#### 问题 1: 缺失 `tunnel_over_proxy_tls` 函数
+
+```
+error[E0425]: cannot find function `tunnel_over_proxy_tls` in this scope
+```
+
+**解决方案**: 确保 TLS 模块中保留了 `tunnel_over_proxy_tls` 函数（用于 HTTPS 代理 + TLS 场景）
+
+#### 问题 2: Future 不满足 `Sync` 约束
+
+```
+future created by async block is not `Sync`
+```
+
+**解决方案**: 为 `Tunnel` trait 的 `establish` 方法添加 `Sync` bound：
+```rust
+fn establish(...) -> Pin<Box<dyn Future<Output = Result<Self::Stream, TunnelError>> + Send + Sync + '_>>;
+```
+
+#### 问题 3: 关联类型 `Stream` 找不到
+
+```
+error[E0220]: associated type `Stream` not found for `C`
+```
+
+**解决方案**: 在使用 `C::Stream` 的文件中添加 `Tunnel` trait 导入：
+```rust
+#[cfg(feature = "__tls")]
+use crate::proxy::tunnel::Tunnel;
+```
+
+#### 问题 4: TLS 链接失败
+
+```
+undefined symbol: SSL_get_rbio, SSL_read, SSL_write...
+```
+
+**解决方案**: 正确配置 OpenSSL 环境变量：
+```bash
+export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+export OPENSSL_INCLUDE_DIR=/usr/include
+export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
+```
+
+***
+
+## 补充说明
+
+### TLS 环境配置
+
+运行 TLS 相关示例需要设置以下环境变量：
+
+| 变量 | 说明 | Ubuntu/Debian 示例 |
+|------|------|-------------------|
+| `OPENSSL_LIB_DIR` | OpenSSL 库目录 | `/usr/lib/x86_64-linux-gnu` |
+| `OPENSSL_INCLUDE_DIR` | OpenSSL 头文件目录 | `/usr/include` |
+| `RUSTFLAGS` | 链接参数 | `-L $OPENSSL_LIB_DIR -l ssl -l crypto` |
+
+> **注意**: `ylong_http_client/test` 脚本已自动配置这些环境变量，直接运行 `./test all` 即可。
+
+### 常用命令速查
+
+```bash
+# 编译检查
+cargo build --features "async,http1_1,tls,ylong_base,libc"
+
+# 运行所有示例
+cd ylong_http_client && ./test all
+
+# 运行库测试
+cargo test --lib --features "async,http1_1,tls,ylong_base,libc"
+
+# 运行 HTTPS 代理 E2E 测试
+cargo test --test sdv_async_https_proxy_e2e --features "async,http1_1,tls,ylong_base,libc"
+```
