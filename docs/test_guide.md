@@ -197,3 +197,62 @@ export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
 
 - **依赖本地服务器的示例**（如 `async_proxy_http`、`async_redirect_http`）需要本地 HTTP 服务器在 `127.0.0.1:3000` 运行，否则会报 "Connection refused"，这是正常行为
 - **TLS 示例**（如 `async_https_outside`、`async_certs_adapter`）需要正确配置 OpenSSL 环境变量
+
+***
+
+## HTTPS 代理 E2E 测试
+
+### 概述
+
+E2E 测试使用 mitmproxy 容器模拟 HTTPS 代理服务器，验证以下功能：
+- HTTP CONNECT 隧道建立
+- HTTPS 代理（无 TLS）
+- HTTPS 代理（TLS 加密）
+- mTLS（双向 TLS 认证）
+- TLS 版本和加密套件配置
+
+### 前置要求
+
+1. **Docker** - 需要 Docker 运行环境
+2. **mitmproxy 镜像** - 测试会自动拉取（或使用预置镜像）
+   ```
+   swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mitmproxy/mitmproxy:11.0
+   ```
+
+### 运行命令
+
+```bash
+cd ylong_http_client
+
+# 设置 OpenSSL 环境变量
+export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+export OPENSSL_INCLUDE_DIR=/usr/include
+export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
+
+# 运行 HTTPS 代理 E2E 测试
+cargo test --test sdv_async_https_proxy_e2e --features "async,http1_1,tls,ylong_base,libc" -- --nocapture
+```
+
+### 预期结果
+
+```
+✅ sdv_async_https_proxy               - 通过
+✅ sdv_async_https_proxy_no_tls        - 通过
+✅ sdv_async_https_proxy_tls           - 通过
+✅ sdv_async_https_proxy_mitmproxy_full_config     - 通过
+✅ sdv_async_https_proxy_mitmproxy_tls_version     - 通过
+✅ sdv_async_https_proxy_mitmproxy_ca_verification - 跳过（可选）
+```
+
+### 故障排查
+
+1. **"Connection refused" 错误**
+   - Docker 容器可能未正常启动
+   - 手动验证：`docker run --rm --network=host --entrypoint mitmdump mitmproxy:11.0 --listen-port 8888`
+
+2. **Docker 网络问题**
+   - 确保 Docker daemon 正在运行
+   - 检查 `--network=host` 是否被支持
+
+3. **镜像拉取慢**
+   - 测试前手动拉取：`docker pull swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mitmproxy/mitmproxy:11.0`
