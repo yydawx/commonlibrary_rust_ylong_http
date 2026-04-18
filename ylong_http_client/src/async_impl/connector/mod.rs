@@ -57,12 +57,25 @@ pub trait Connector {
 pub struct HttpConnector {
     config: ConnectorConfig,
     resolver: Arc<dyn Resolver>,
+    tunnel_factory: Option<
+        std::sync::Arc<dyn crate::proxy::tunnel::Tunnel<Stream = crate::runtime::TcpStream>>,
+    >,
 }
 
 impl HttpConnector {
     /// Creates a new `HttpConnector` with a `ConnectorConfig`.
-    pub(crate) fn new(config: ConnectorConfig, resolver: Arc<dyn Resolver>) -> Self {
-        Self { config, resolver }
+    pub(crate) fn new(
+        config: ConnectorConfig,
+        resolver: Arc<dyn Resolver>,
+        tunnel_factory: Option<
+            std::sync::Arc<dyn crate::proxy::tunnel::Tunnel<Stream = crate::runtime::TcpStream>>,
+        >,
+    ) -> Self {
+        Self {
+            config,
+            resolver,
+            tunnel_factory,
+        }
     }
 
     /// Creates a new `HttpConnector` with a given dns `Resolver`.
@@ -74,6 +87,7 @@ impl HttpConnector {
         Self {
             config: Default::default(),
             resolver,
+            tunnel_factory: None,
         }
     }
 }
@@ -83,6 +97,7 @@ impl Default for HttpConnector {
         Self {
             config: Default::default(),
             resolver: Arc::new(DefaultDnsResolver::default()),
+            tunnel_factory: None,
         }
     }
 }
@@ -299,6 +314,7 @@ mod tls {
                     proxy_tls_config = Some(proxy.tls_config.clone());
                 }
             }
+            let tunnel_factory = self.tunnel_factory.clone();
             #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls"))]
             let fchown = self.config.fchown.clone();
             let resolver = self.resolver.clone();
@@ -444,6 +460,7 @@ mod tls {
                             (auth, host, port),
                             time_group,
                             proxy_tls_config,
+                            tunnel_factory,
                         )
                         .await
                     })
@@ -460,6 +477,9 @@ mod tls {
         (auth, host, port): (Option<String>, String, u16),
         mut time_group: TimeGroup,
         proxy_tls_config: Option<ProxyTlsConfig>,
+        tunnel_factory: Option<
+            std::sync::Arc<dyn crate::proxy::tunnel::Tunnel<Stream = crate::runtime::TcpStream>>,
+        >,
     ) -> Result<HttpStream<MixStream>, HttpClientError> {
         let tcp = tcp_stream;
         let local = tcp
@@ -497,9 +517,29 @@ mod tls {
                     })?;
                 time_group.set_tls_end(Instant::now());
 
-                proxy_ssl_stream = tunnel_over_proxy_tls(proxy_ssl_stream, &host, port, auth)
+                let tunnel = tunnel_factory
+                    .as_ref()
+                    .map(|t| t.clone())
+                    .unwrap_or_else(|| {
+                        crate::proxy::DefaultTunnelFactory::new().create_tcp_tunnel()
+                    });
+                let auth_value: Option<Box<dyn crate::proxy::auth::ProxyAuth + Send + Sync>> =
+                    auth.as_ref().map(|a| {
+                        Box::new(crate::proxy::auth::BasicAuth::from_encoded(a))
+                            as Box<dyn crate::proxy::auth::ProxyAuth + Send + Sync>
+                    });
+                let auth_ref: Option<&dyn crate::proxy::auth::ProxyAuth> = auth_value
+                    .as_ref()
+                    .map(|a| a.as_ref() as &dyn crate::proxy::auth::ProxyAuth);
+                proxy_ssl_stream = tunnel
+                    .establish(proxy_ssl_stream, &host, port, auth_ref)
                     .await
-                    .map_err(|e| HttpClientError::from_io_error(crate::ErrorKind::Connect, e))?;
+                    .map_err(|e| {
+                        HttpClientError::from_io_error(
+                            crate::ErrorKind::Connect,
+                            Error::new(ErrorKind::Other, e),
+                        )
+                    })?;
 
                 let pinned_key = config.pinning_host_match(addr.as_str());
                 let mut target_ssl_stream = config
@@ -555,9 +595,27 @@ mod tls {
             }
 
             let mut tcp = tcp;
-            tcp = tunnel(tcp, &host, port, auth)
+            let tunnel = tunnel_factory
+                .as_ref()
+                .map(|t| t.clone())
+                .unwrap_or_else(|| crate::proxy::DefaultTunnelFactory::new().create_tcp_tunnel());
+            let auth_value: Option<Box<dyn crate::proxy::auth::ProxyAuth + Send + Sync>> =
+                auth.as_ref().map(|a| {
+                    Box::new(crate::proxy::auth::BasicAuth::from_encoded(a))
+                        as Box<dyn crate::proxy::auth::ProxyAuth + Send + Sync>
+                });
+            let auth_ref: Option<&dyn crate::proxy::auth::ProxyAuth> = auth_value
+                .as_ref()
+                .map(|a| a.as_ref() as &dyn crate::proxy::auth::ProxyAuth);
+            tcp = tunnel
+                .establish(tcp, &host, port, auth_ref)
                 .await
-                .map_err(|e| HttpClientError::from_io_error(crate::ErrorKind::Connect, e))?;
+                .map_err(|e| {
+                    HttpClientError::from_io_error(
+                        crate::ErrorKind::Connect,
+                        Error::new(ErrorKind::Other, e),
+                    )
+                })?;
 
             let pinned_key = config.pinning_host_match(addr.as_str());
             let mut stream = config
@@ -657,105 +715,6 @@ mod tls {
         proxy_tls
             .apply_to_builder(builder)
             .and_then(|b: TlsConfigBuilder| b.build())
-    }
-
-    async fn tunnel(
-        mut conn: TcpStream,
-        host: &str,
-        port: u16,
-        auth: Option<String>,
-    ) -> Result<TcpStream, Error> {
-        let mut req = Vec::new();
-
-        write!(
-            &mut req,
-            "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n"
-        )?;
-
-        if let Some(value) = auth {
-            write!(&mut req, "Proxy-Authorization: Basic {value}\r\n")?;
-        }
-
-        write!(&mut req, "\r\n")?;
-
-        conn.write_all(&req).await?;
-
-        let mut buf = [0; 8192];
-        let mut pos = 0;
-
-        loop {
-            let n = conn.read(&mut buf[pos..]).await?;
-
-            if n == 0 {
-                return Err(other_io_error(CreateTunnelErr::Unsuccessful));
-            }
-
-            pos += n;
-            let resp = &buf[..pos];
-            if resp.starts_with(b"HTTP/1.1 200") || resp.starts_with(b"HTTP/1.0 200") {
-                if resp.ends_with(b"\r\n\r\n") {
-                    return Ok(conn);
-                }
-                if pos == buf.len() {
-                    return Err(other_io_error(CreateTunnelErr::ProxyHeadersTooLong));
-                }
-            } else if resp.starts_with(b"HTTP/1.1 407") {
-                return Err(other_io_error(CreateTunnelErr::ProxyAuthenticationRequired));
-            } else {
-                return Err(other_io_error(CreateTunnelErr::Unsuccessful));
-            }
-        }
-    }
-
-    async fn tunnel_over_proxy_tls<S>(
-        mut conn: AsyncSslStream<S>,
-        host: &str,
-        port: u16,
-        auth: Option<String>,
-    ) -> Result<AsyncSslStream<S>, Error>
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-    {
-        let mut req = Vec::new();
-
-        write!(
-            &mut req,
-            "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n"
-        )?;
-
-        if let Some(value) = auth {
-            write!(&mut req, "Proxy-Authorization: Basic {value}\r\n")?;
-        }
-
-        write!(&mut req, "\r\n")?;
-
-        Pin::new(&mut conn).write_all(&req).await?;
-
-        let mut buf = [0; 8192];
-        let mut pos = 0;
-
-        loop {
-            let n = Pin::new(&mut conn).read(&mut buf[pos..]).await?;
-
-            if n == 0 {
-                return Err(other_io_error(CreateTunnelErr::Unsuccessful));
-            }
-
-            pos += n;
-            let resp = &buf[..pos];
-            if resp.starts_with(b"HTTP/1.1 200") || resp.starts_with(b"HTTP/1.0 200") {
-                if resp.ends_with(b"\r\n\r\n") {
-                    return Ok(conn);
-                }
-                if pos == buf.len() {
-                    return Err(other_io_error(CreateTunnelErr::ProxyHeadersTooLong));
-                }
-            } else if resp.starts_with(b"HTTP/1.1 407") {
-                return Err(other_io_error(CreateTunnelErr::ProxyAuthenticationRequired));
-            } else {
-                return Err(other_io_error(CreateTunnelErr::Unsuccessful));
-            }
-        }
     }
 
     fn other_io_error(err: CreateTunnelErr) -> Error {

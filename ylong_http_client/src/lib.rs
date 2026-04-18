@@ -57,6 +57,12 @@ pub(crate) mod util;
     any(feature = "async", feature = "sync"),
     any(feature = "http1_1", feature = "http2"),
 ))]
+pub mod proxy;
+
+#[cfg(all(
+    any(feature = "async", feature = "sync"),
+    any(feature = "http1_1", feature = "http2"),
+))]
 pub use error::{ErrorKind, HttpClientError};
 #[cfg(all(
     any(feature = "async", feature = "sync"),

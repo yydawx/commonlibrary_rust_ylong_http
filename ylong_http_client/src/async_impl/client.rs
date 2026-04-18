@@ -335,6 +335,11 @@ pub struct ClientBuilder {
     /// Options and flags that is related to `TLS`.
     #[cfg(feature = "__tls")]
     tls: crate::util::TlsConfigBuilder,
+
+    /// Tunnel factory for proxy connections.
+    tunnel_factory: Option<
+        std::sync::Arc<dyn crate::proxy::tunnel::Tunnel<Stream = crate::runtime::TcpStream>>,
+    >,
 }
 
 impl ClientBuilder {
@@ -358,6 +363,7 @@ impl ClientBuilder {
             resolver: Arc::new(DefaultDnsResolver::default()),
             #[cfg(feature = "__tls")]
             tls: crate::util::TlsConfig::builder(),
+            tunnel_factory: None,
         }
     }
 
@@ -496,6 +502,30 @@ impl ClientBuilder {
     /// ```
     pub fn proxy(mut self, proxy: Proxy) -> Self {
         self.proxies.add_proxy(proxy.inner());
+        self
+    }
+
+    /// Sets the tunnel factory for proxy connections.
+    ///
+    /// This allows customization of how tunnels are established through proxies.
+    /// By default, the built-in HTTP CONNECT tunnel implementation is used.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ylong_http_client::async_impl::ClientBuilder;
+    /// use ylong_http_client::proxy::DefaultTunnelFactory;
+    ///
+    /// let builder = ClientBuilder::new()
+    ///     .tunnel(DefaultTunnelFactory::new().to_arc());
+    /// ```
+    pub fn tunnel(
+        mut self,
+        tunnel: std::sync::Arc<
+            dyn crate::proxy::tunnel::Tunnel<Stream = crate::runtime::TcpStream>,
+        >,
+    ) -> Self {
+        self.tunnel_factory = Some(tunnel);
         self
     }
 
@@ -645,7 +675,7 @@ impl ClientBuilder {
             timeout: self.client.connect_timeout.clone(),
         };
 
-        let connector = HttpConnector::new(config, self.resolver);
+        let connector = HttpConnector::new(config, self.resolver, self.tunnel_factory);
 
         Ok(Client {
             inner: ConnPool::new(self.http, connector),
