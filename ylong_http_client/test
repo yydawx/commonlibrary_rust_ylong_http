@@ -2,6 +2,12 @@
 
 cd "$(dirname "$0")"
 
+OPENSSL_LIB_DIR="${OPENSSL_LIB_DIR:-/usr/lib/x86_64-linux-gnu}"
+OPENSSL_INCLUDE_DIR="${OPENSSL_INCLUDE_DIR:-/usr/include}"
+export OPENSSL_LIB_DIR
+export OPENSSL_INCLUDE_DIR
+export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
+
 get_examples() {
     cargo run --example 2>&1 | grep -E "^    " | sed 's/^    //'
 }

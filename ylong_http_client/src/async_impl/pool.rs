@@ -27,6 +27,8 @@ use crate::async_impl::Connector;
 #[cfg(feature = "http3")]
 use crate::async_impl::Response;
 use crate::error::HttpClientError;
+#[cfg(feature = "__tls")]
+use crate::proxy::tunnel::Tunnel;
 use crate::runtime::{AsyncRead, AsyncWrite};
 #[cfg(feature = "http3")]
 use crate::util::alt_svc::{AltService, AltServiceMap};

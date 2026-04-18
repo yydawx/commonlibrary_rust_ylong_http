@@ -117,7 +117,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + Sync + Debug + 'static> Tunnel
         target: &str,
         port: u16,
         auth: Option<&dyn ProxyAuth>,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Stream, TunnelError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Stream, TunnelError>> + Send + Sync + '_>> {
         let req = self.build_connect_request(target, port, auth);
         let buffer_size = self.buffer_size;
 

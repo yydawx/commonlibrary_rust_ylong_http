@@ -13,10 +13,16 @@
 
 //! Tunnel module for proxy tunnel establishment.
 
+#[cfg(any(feature = "async", feature = "sync"))]
 mod factory;
+#[cfg(any(feature = "async", feature = "sync"))]
 mod http_connect;
+#[cfg(any(feature = "async", feature = "sync"))]
 mod tunnel_trait;
 
+#[cfg(any(feature = "async", feature = "sync"))]
 pub use factory::DefaultTunnelFactory;
+#[cfg(any(feature = "async", feature = "sync"))]
 pub use http_connect::HttpConnectTunnel;
+#[cfg(any(feature = "async", feature = "sync"))]
 pub use tunnel_trait::Tunnel;

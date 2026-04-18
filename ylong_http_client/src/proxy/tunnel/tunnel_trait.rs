@@ -42,7 +42,7 @@ pub trait Tunnel: Debug + Send + Sync + 'static {
         target: &str,
         port: u16,
         auth: Option<&dyn ProxyAuth>,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Stream, TunnelError>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Stream, TunnelError>> + Send + Sync + '_>>;
 
     /// Returns the name of this tunnel type for registration.
     fn name(&self) -> &'static str {

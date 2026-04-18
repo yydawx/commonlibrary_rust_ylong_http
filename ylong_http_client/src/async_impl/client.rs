@@ -21,6 +21,8 @@ use super::{conn, Connector, HttpConnector, Request, Response};
 use crate::async_impl::dns::{DefaultDnsResolver, Resolver};
 use crate::async_impl::request::Message;
 use crate::error::HttpClientError;
+#[cfg(feature = "__tls")]
+use crate::proxy::tunnel::Tunnel;
 use crate::runtime::timeout;
 #[cfg(feature = "__tls")]
 use crate::util::c_openssl::verify::PubKeyPins;
@@ -337,6 +339,7 @@ pub struct ClientBuilder {
     tls: crate::util::TlsConfigBuilder,
 
     /// Tunnel factory for proxy connections.
+    #[cfg(feature = "__tls")]
     tunnel_factory: Option<
         std::sync::Arc<dyn crate::proxy::tunnel::Tunnel<Stream = crate::runtime::TcpStream>>,
     >,
@@ -363,6 +366,7 @@ impl ClientBuilder {
             resolver: Arc::new(DefaultDnsResolver::default()),
             #[cfg(feature = "__tls")]
             tls: crate::util::TlsConfig::builder(),
+            #[cfg(feature = "__tls")]
             tunnel_factory: None,
         }
     }
@@ -519,6 +523,7 @@ impl ClientBuilder {
     /// let builder = ClientBuilder::new()
     ///     .tunnel(DefaultTunnelFactory::new().to_arc());
     /// ```
+    #[cfg(feature = "__tls")]
     pub fn tunnel(
         mut self,
         tunnel: std::sync::Arc<
@@ -675,7 +680,10 @@ impl ClientBuilder {
             timeout: self.client.connect_timeout.clone(),
         };
 
+        #[cfg(feature = "__tls")]
         let connector = HttpConnector::new(config, self.resolver, self.tunnel_factory);
+        #[cfg(not(feature = "__tls"))]
+        let connector = HttpConnector::new(config, self.resolver);
 
         Ok(Client {
             inner: ConnPool::new(self.http, connector),

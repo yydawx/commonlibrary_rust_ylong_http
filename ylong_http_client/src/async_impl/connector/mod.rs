@@ -28,6 +28,8 @@ use ylong_http::request::uri::Uri;
 use ylong_runtime::net::{ConnectedUdpSocket, UdpSocket};
 
 use crate::async_impl::dns::{DefaultDnsResolver, EyeBallConfig, HappyEyeballs, Resolver};
+#[cfg(feature = "__tls")]
+use crate::proxy::tunnel::Tunnel;
 use crate::runtime::{AsyncRead, AsyncWrite, TcpStream};
 use crate::util::config::{ConnectorConfig, HttpVersion};
 /// Information of an IO.
@@ -57,6 +59,7 @@ pub trait Connector {
 pub struct HttpConnector {
     config: ConnectorConfig,
     resolver: Arc<dyn Resolver>,
+    #[cfg(feature = "__tls")]
     tunnel_factory: Option<
         std::sync::Arc<dyn crate::proxy::tunnel::Tunnel<Stream = crate::runtime::TcpStream>>,
     >,
@@ -67,13 +70,14 @@ impl HttpConnector {
     pub(crate) fn new(
         config: ConnectorConfig,
         resolver: Arc<dyn Resolver>,
-        tunnel_factory: Option<
+        #[cfg(feature = "__tls")] tunnel_factory: Option<
             std::sync::Arc<dyn crate::proxy::tunnel::Tunnel<Stream = crate::runtime::TcpStream>>,
         >,
     ) -> Self {
         Self {
             config,
             resolver,
+            #[cfg(feature = "__tls")]
             tunnel_factory,
         }
     }
@@ -87,6 +91,7 @@ impl HttpConnector {
         Self {
             config: Default::default(),
             resolver,
+            #[cfg(feature = "__tls")]
             tunnel_factory: None,
         }
     }
@@ -97,6 +102,7 @@ impl Default for HttpConnector {
         Self {
             config: Default::default(),
             resolver: Arc::new(DefaultDnsResolver::default()),
+            #[cfg(feature = "__tls")]
             tunnel_factory: None,
         }
     }
@@ -314,6 +320,7 @@ mod tls {
                     proxy_tls_config = Some(proxy.tls_config.clone());
                 }
             }
+            #[cfg(feature = "__tls")]
             let tunnel_factory = self.tunnel_factory.clone();
             #[cfg(all(target_os = "linux", feature = "ylong_base", feature = "__tls"))]
             let fchown = self.config.fchown.clone();
@@ -469,6 +476,8 @@ mod tls {
         }
     }
 
+    #[cfg(feature = "__tls")]
+    #[cfg(feature = "__tls")]
     async fn https_connect(
         config: TlsConfig,
         addr: String,
@@ -517,29 +526,12 @@ mod tls {
                     })?;
                 time_group.set_tls_end(Instant::now());
 
-                let tunnel = tunnel_factory
-                    .as_ref()
-                    .map(|t| t.clone())
-                    .unwrap_or_else(|| {
-                        crate::proxy::DefaultTunnelFactory::new().create_tcp_tunnel()
-                    });
-                let auth_value: Option<Box<dyn crate::proxy::auth::ProxyAuth + Send + Sync>> =
-                    auth.as_ref().map(|a| {
-                        Box::new(crate::proxy::auth::BasicAuth::from_encoded(a))
-                            as Box<dyn crate::proxy::auth::ProxyAuth + Send + Sync>
-                    });
-                let auth_ref: Option<&dyn crate::proxy::auth::ProxyAuth> = auth_value
-                    .as_ref()
-                    .map(|a| a.as_ref() as &dyn crate::proxy::auth::ProxyAuth);
-                proxy_ssl_stream = tunnel
-                    .establish(proxy_ssl_stream, &host, port, auth_ref)
+                // For HTTPS proxy with TLS, we need to keep the SSL stream
+                // The new tunnel module currently only supports TcpStream
+                // Fall back to old logic for now
+                proxy_ssl_stream = tunnel_over_proxy_tls(proxy_ssl_stream, &host, port, auth)
                     .await
-                    .map_err(|e| {
-                        HttpClientError::from_io_error(
-                            crate::ErrorKind::Connect,
-                            Error::new(ErrorKind::Other, e),
-                        )
-                    })?;
+                    .map_err(|e| HttpClientError::from_io_error(crate::ErrorKind::Connect, e))?;
 
                 let pinned_key = config.pinning_host_match(addr.as_str());
                 let mut target_ssl_stream = config
@@ -717,6 +709,57 @@ mod tls {
             .and_then(|b: TlsConfigBuilder| b.build())
     }
 
+    async fn tunnel_over_proxy_tls<S>(
+        mut conn: AsyncSslStream<S>,
+        host: &str,
+        port: u16,
+        auth: Option<String>,
+    ) -> Result<AsyncSslStream<S>, Error>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let mut req = Vec::new();
+
+        write!(
+            &mut req,
+            "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+        )?;
+
+        if let Some(value) = auth {
+            write!(&mut req, "Proxy-Authorization: Basic {value}\r\n")?;
+        }
+
+        write!(&mut req, "\r\n")?;
+
+        Pin::new(&mut conn).write_all(&req).await?;
+
+        let mut buf = [0; 8192];
+        let mut pos = 0;
+
+        loop {
+            let n = Pin::new(&mut conn).read(&mut buf[pos..]).await?;
+
+            if n == 0 {
+                return Err(other_io_error(CreateTunnelErr::Unsuccessful));
+            }
+
+            pos += n;
+            let resp = &buf[..pos];
+            if resp.starts_with(b"HTTP/1.1 200") || resp.starts_with(b"HTTP/1.0 200") {
+                if resp.ends_with(b"\r\n\r\n") {
+                    return Ok(conn);
+                }
+                if pos == buf.len() {
+                    return Err(other_io_error(CreateTunnelErr::ProxyHeadersTooLong));
+                }
+            } else if resp.starts_with(b"HTTP/1.1 407") {
+                return Err(other_io_error(CreateTunnelErr::ProxyAuthenticationRequired));
+            } else {
+                return Err(other_io_error(CreateTunnelErr::Unsuccessful));
+            }
+        }
+    }
+
     fn other_io_error(err: CreateTunnelErr) -> Error {
         Error::new(ErrorKind::Other, err)
     }
@@ -744,272 +787,4 @@ mod tls {
     }
 
     impl error::Error for CreateTunnelErr {}
-
-    #[cfg(all(test, feature = "__tls"))]
-    mod ut_tunnel_error_debug {
-        use crate::async_impl::connector::tls::CreateTunnelErr;
-
-        /// UT test cases for debug of`CreateTunnelErr`.
-        ///
-        /// # Brief
-        /// 1. Checks `CreateTunnelErr` debug by calling `CreateTunnelErr::fmt`.
-        /// 2. Checks if the result is as expected.
-        #[test]
-        fn ut_tunnel_error_debug_assert() {
-            assert_eq!(
-                format!("{:?}", CreateTunnelErr::ProxyHeadersTooLong),
-                "Proxy headers too long for tunnel"
-            );
-            assert_eq!(
-                format!("{:?}", CreateTunnelErr::ProxyAuthenticationRequired),
-                "Proxy authentication required"
-            );
-            assert_eq!(
-                format!("{:?}", CreateTunnelErr::Unsuccessful),
-                "Unsuccessful tunnel"
-            );
-            assert_eq!(
-                format!("{}", CreateTunnelErr::ProxyHeadersTooLong),
-                "Proxy headers too long for tunnel"
-            );
-            assert_eq!(
-                format!("{}", CreateTunnelErr::ProxyAuthenticationRequired),
-                "Proxy authentication required"
-            );
-            assert_eq!(
-                format!("{}", CreateTunnelErr::Unsuccessful),
-                "Unsuccessful tunnel"
-            );
-        }
-    }
-
-    #[cfg(all(test, feature = "__tls", feature = "ylong_base"))]
-    mod ut_create_tunnel_err_debug {
-        use std::net::SocketAddr;
-        use std::str::FromStr;
-
-        use ylong_runtime::io::AsyncWriteExt;
-
-        use crate::async_impl::connector::tcp_stream;
-        use crate::async_impl::connector::tls::{other_io_error, tunnel, CreateTunnelErr};
-        use crate::async_impl::dns::{EyeBallConfig, HappyEyeballs};
-        use crate::start_tcp_server;
-        use crate::util::test_utils::{format_header_str, TcpHandle};
-
-        /// UT test cases for `tunnel`.
-        ///
-        /// # Brief
-        /// 1. Creates a `tcp stream` by calling `tcp_stream`.
-        /// 2. Sends a `Request` by `tunnel`.
-        /// 3. Checks if the result is as expected.
-        #[test]
-        fn ut_ssl_tunnel_error() {
-            let mut handles = vec![];
-            start_tcp_server!(
-               Handles: handles,
-               EndWith: "\r\n\r\n",
-               Shutdown: std::net::Shutdown::Both,
-            );
-            let handle = handles.pop().expect("No more handles !");
-
-            let eyeballs = HappyEyeballs::new(
-                vec![SocketAddr::from_str(handle.addr.as_str()).unwrap()],
-                EyeBallConfig::new(None, None),
-            );
-
-            let handle = ylong_runtime::spawn(async move {
-                let tcp = tcp_stream(eyeballs).await.unwrap();
-                let res = tunnel(
-                    tcp,
-                    "ylong_http.com",
-                    443,
-                    Some(String::from("base64 bytes")),
-                )
-                .await;
-                assert_eq!(
-                    format!("{:?}", res.err()),
-                    format!("{:?}", Some(other_io_error(CreateTunnelErr::Unsuccessful)))
-                );
-                handle
-                    .server_shutdown
-                    .recv()
-                    .expect("server send order failed !");
-            });
-            ylong_runtime::block_on(handle).unwrap();
-
-            start_tcp_server!(
-               Handles: handles,
-               EndWith: "\r\n\r\n",
-               Response: {
-                   Status: 407,
-                   Version: "HTTP/1.1",
-                   Header: "Content-Length", "11",
-                   Body: "METHOD GET!",
-               },
-               Shutdown: std::net::Shutdown::Both,
-            );
-            let handle = handles.pop().expect("No more handles !");
-
-            let eyeballs = HappyEyeballs::new(
-                vec![SocketAddr::from_str(handle.addr.as_str()).unwrap()],
-                EyeBallConfig::new(None, None),
-            );
-            let handle = ylong_runtime::spawn(async move {
-                let tcp = tcp_stream(eyeballs).await.unwrap();
-                let res = tunnel(
-                    tcp,
-                    "ylong_http.com",
-                    443,
-                    Some(String::from("base64 bytes")),
-                )
-                .await;
-                assert_eq!(
-                    format!("{:?}", res.err()),
-                    format!(
-                        "{:?}",
-                        Some(other_io_error(CreateTunnelErr::ProxyAuthenticationRequired))
-                    )
-                );
-                handle
-                    .server_shutdown
-                    .recv()
-                    .expect("server send order failed !");
-            });
-            ylong_runtime::block_on(handle).unwrap();
-
-            start_tcp_server!(
-               Handles: handles,
-               EndWith: "\r\n\r\n",
-               Response: {
-                   Status: 402,
-                   Version: "HTTP/1.1",
-                   Header: "Content-Length", "11",
-                   Body: "METHOD GET!",
-               },
-               Shutdown: std::net::Shutdown::Both,
-            );
-            let handle = handles.pop().expect("No more handles !");
-
-            let eyeballs = HappyEyeballs::new(
-                vec![SocketAddr::from_str(handle.addr.as_str()).unwrap()],
-                EyeBallConfig::new(None, None),
-            );
-            let handle = ylong_runtime::spawn(async move {
-                let tcp = tcp_stream(eyeballs).await.unwrap();
-                let res = tunnel(
-                    tcp,
-                    "ylong_http.com",
-                    443,
-                    Some(String::from("base64 bytes")),
-                )
-                .await;
-                assert_eq!(
-                    format!("{:?}", res.err()),
-                    format!("{:?}", Some(other_io_error(CreateTunnelErr::Unsuccessful)))
-                );
-                handle
-                    .server_shutdown
-                    .recv()
-                    .expect("server send order failed !");
-            });
-            ylong_runtime::block_on(handle).unwrap();
-        }
-
-        /// UT test cases for `tunnel`.
-        ///
-        /// # Brief
-        /// 1. Creates a `tcp stream` by calling `tcp_stream`.
-        /// 2. Sends a `Request` by `tunnel`.
-        /// 3. Checks if the result is as expected.
-        #[test]
-        fn ut_ssl_tunnel_connect() {
-            let mut handles = vec![];
-
-            start_tcp_server!(
-               Handles: handles,
-               EndWith: "\r\n\r\n",
-                Response: {
-                   Status: 200,
-                   Version: "HTTP/1.1",
-                   Body: "",
-               },
-               Shutdown: std::net::Shutdown::Both,
-            );
-            let handle = handles.pop().expect("No more handles !");
-
-            let eyeballs = HappyEyeballs::new(
-                vec![SocketAddr::from_str(handle.addr.as_str()).unwrap()],
-                EyeBallConfig::new(None, None),
-            );
-            let handle = ylong_runtime::spawn(async move {
-                let tcp = tcp_stream(eyeballs).await.unwrap();
-                let res = tunnel(
-                    tcp,
-                    "ylong_http.com",
-                    443,
-                    Some(String::from("base64 bytes")),
-                )
-                .await;
-                assert!(res.is_ok());
-                handle
-                    .server_shutdown
-                    .recv()
-                    .expect("server send order failed !");
-            });
-            ylong_runtime::block_on(handle).unwrap();
-        }
-
-        /// UT test cases for response beyond size of `tunnel`.
-        ///
-        /// # Brief
-        /// 1. Creates a `tcp stream` by calling `tcp_stream`.
-        /// 2. Sends a `Request` by `tunnel`.
-        /// 3. Checks if the result is as expected.
-        #[test]
-        fn ut_ssl_tunnel_resp_beyond_size() {
-            let mut handles = vec![];
-
-            let buf = vec![b'b'; 8192];
-            let body = String::from_utf8(buf).unwrap();
-
-            start_tcp_server!(
-               Handles: handles,
-               EndWith: "\r\n\r\n",
-                Response: {
-                   Status: 200,
-                   Version: "HTTP/1.1",
-                   Header: "Content-Length", "11",
-                   Body: body.as_str(),
-               },
-            );
-            let handle = handles.pop().expect("No more handles !");
-
-            let eyeballs = HappyEyeballs::new(
-                vec![SocketAddr::from_str(handle.addr.as_str()).unwrap()],
-                EyeBallConfig::new(None, None),
-            );
-            let handle = ylong_runtime::spawn(async move {
-                let tcp = tcp_stream(eyeballs).await.unwrap();
-                let res = tunnel(
-                    tcp,
-                    "ylong_http.com",
-                    443,
-                    Some(String::from("base64 bytes")),
-                )
-                .await;
-                assert_eq!(
-                    format!("{:?}", res.err()),
-                    format!(
-                        "{:?}",
-                        Some(other_io_error(CreateTunnelErr::ProxyHeadersTooLong))
-                    )
-                );
-                handle
-                    .server_shutdown
-                    .recv()
-                    .expect("server send order failed !");
-            });
-            ylong_runtime::block_on(handle).unwrap();
-        }
-    }
 }

@@ -129,6 +129,47 @@ cd ylong_http_client
 cargo test --features=async,http1_1,ylong_base
 ```
 
+### 编译问题排查
+
+#### 问题: HTTPS 代理场景编译失败
+
+在启用 TLS 特性 (`__tls`) 时编译可能遇到以下错误：
+
+1. **缺失 `tunnel_over_proxy_tls` 函数**
+   ```
+   error[E0425]: cannot find function `tunnel_over_proxy_tls` in this scope
+   ```
+   **解决方案**: 确保 TLS 模块中保留了 `tunnel_over_proxy_tls` 函数（用于 HTTPS 代理 + TLS 场景）
+
+2. **Future 不满足 `Sync` 约束**
+   ```
+   future created by async block is not `Sync`
+   ```
+   **解决方案**: 为 `Tunnel` trait 的 `establish` 方法添加 `Sync` bound：
+   ```rust
+   fn establish(...) -> Pin<Box<dyn Future<Output = Result<Self::Stream, TunnelError>> + Send + Sync + '_>>;
+   ```
+
+3. **关联类型 `Stream` 找不到**
+   ```
+   error[E0220]: associated type `Stream` not found for `C`
+   ```
+   **解决方案**: 在使用 `C::Stream` 的文件中添加 `Tunnel` trait 导入：
+   ```rust
+   #[cfg(feature = "__tls")]
+   use crate::proxy::tunnel::Tunnel;
+   ```
+
+#### 推荐编译命令
+
+```bash
+# 基础编译（无 TLS）
+cargo build --features "async,http1_1,ylong_base,libc"
+
+# TLS 编译（完整特性）
+cargo build --features "async,http1_1,tls,ylong_base,libc"
+```
+
 ##
 
 ***
@@ -141,6 +182,18 @@ cargo test --features=async,http1_1,ylong_base
 
 - `OPENSSL_LIB_DIR` - OpenSSL 库目录
 - `OPENSSL_INCLUDE_DIR` - OpenSSL 头文件目录
-- `RUSTFLAGS` - 链接参数 `-l ssl -l crypto`
+- `RUSTFLAGS` - 链接参数
 
-不同系统可能路径不同，请根据实际情况调整。
+**示例（Ubuntu/Debian）：**
+```bash
+export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+export OPENSSL_INCLUDE_DIR=/usr/include
+export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
+```
+
+> **注意**: `ylong_http_client/test` 脚本已自动配置这些环境变量，直接运行 `./test all` 即可。
+
+### 测试结果说明
+
+- **依赖本地服务器的示例**（如 `async_proxy_http`、`async_redirect_http`）需要本地 HTTP 服务器在 `127.0.0.1:3000` 运行，否则会报 "Connection refused"，这是正常行为
+- **TLS 示例**（如 `async_https_outside`、`async_certs_adapter`）需要正确配置 OpenSSL 环境变量
