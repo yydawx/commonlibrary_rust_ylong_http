@@ -22,7 +22,6 @@ use ylong_http_client::{HttpClientError, Proxy};
 async fn main() -> Result<(), HttpClientError> {
     // Creates a `async_impl::Client`
     let client = ClientBuilder::new()
-        .proxy(Proxy::all("http://proxy.example.com").build()?)
         .build()?;
     // Creates a `Request`.
     let request = Request::builder()

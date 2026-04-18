@@ -69,6 +69,20 @@
 
 #### 运行示例
 
+#### 前置准备
+
+1. **安装 miniserve**（用于本地 HTTP 服务器）
+   ```bash
+   cargo install miniserve
+   ```
+
+2. **启动本地 HTTP 服务器**
+   ```bash
+   miniserve --port 3000 .
+   ```
+
+#### 运行命令
+
 ```bash
 # 使用 test 脚本运行所有示例（自动配置 OpenSSL）
 cd ylong_http_client && ./test all
@@ -117,20 +131,31 @@ cargo test --lib --features "async,http1_1,tls,ylong_base,libc"
    ```
    swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mitmproxy/mitmproxy:11.0
    ```
+3. **OpenSSL 环境配置**
+   ```bash
+   export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+   export OPENSSL_INCLUDE_DIR=/usr/include
+   export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
+   ```
 
-#### 运行命令
+#### 运行流程
 
-```bash
-cd ylong_http_client
+1. **验证 Docker 状态**
+   ```bash
+   docker --version
+   systemctl status docker  # 检查 Docker 服务是否运行
+   ```
 
-# 设置 OpenSSL 环境变量
-export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
-export OPENSSL_INCLUDE_DIR=/usr/include
-export RUSTFLAGS="-L $OPENSSL_LIB_DIR -l ssl -l crypto"
+2. **拉取 mitmproxy 镜像**（可选，测试会自动拉取）
+   ```bash
+   docker pull swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mitmproxy/mitmproxy:11.0
+   ```
 
-# 运行 HTTPS 代理 E2E 测试
-cargo test --test sdv_async_https_proxy_e2e --features "async,http1_1,tls,ylong_base,libc" -- --nocapture
-```
+3. **运行 E2E 测试**
+   ```bash
+   cd ylong_http_client
+   cargo test --test sdv_async_https_proxy_e2e --features "async,http1_1,tls,ylong_base,libc" -- --nocapture
+   ```
 
 #### 预期结果
 
@@ -154,6 +179,10 @@ cargo test --test sdv_async_https_proxy_e2e --features "async,http1_1,tls,ylong_
 
 3. **镜像拉取慢**
    - 测试前手动拉取：`docker pull swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mitmproxy/mitmproxy:11.0`
+
+4. **OpenSSL 链接错误**
+   - 确保正确设置了 OpenSSL 环境变量
+   - 检查 OpenSSL 库是否安装：`apt install libssl-dev`（Ubuntu/Debian）
 
 ***
 
