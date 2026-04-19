@@ -18,6 +18,7 @@ ylong_runtime = { git = "https://gitcode.com/openharmony/commonlibrary_rust_ylon
 hyper = { version = "0.14.23", features = ["http1", "http2", "tcp", "server"] }
 openssl = { version = "0.10.29" }
 tokio-openssl = { version = "0.6.3" }
+# criterion = { version = "0.5", features = ["tokio"] }
 
 [features]
 default = []
@@ -115,3 +116,28 @@ required-features = ["async", "http1_1", "ylong_base", "tls"]
 name = "async_https_proxy_e2e"
 path = "examples/async_https_proxy_e2e.rs"
 required-features = ["async", "http1_1", "ylong_base", "tls"]
+
+[[example]]
+name = "bench_all"
+path = "examples/bench_all.rs"
+required-features = ["async", "http1_1", "ylong_base", "tls", "__c_openssl", "c_openssl_3_0"]
+
+[[example]]
+name = "bench_proxy_connect"
+path = "examples/bench_proxy_connect.rs"
+required-features = ["async", "http1_1", "ylong_base", "tls", "__c_openssl", "c_openssl_3_0"]
+
+[[example]]
+name = "bench_proxy_timing"
+path = "examples/bench_proxy_timing.rs"
+required-features = ["async", "http1_1", "ylong_base", "tls", "__c_openssl", "c_openssl_3_0"]
+
+[[example]]
+name = "bench_proxy_throughput"
+path = "examples/bench_proxy_throughput.rs"
+required-features = ["async", "http1_1", "ylong_base", "tls", "__c_openssl", "c_openssl_3_0"]
+
+[[example]]
+name = "bench_proxy_reuse"
+path = "examples/bench_proxy_reuse.rs"
+required-features = ["async", "http1_1", "ylong_base", "tls", "__c_openssl", "c_openssl_3_0"]
